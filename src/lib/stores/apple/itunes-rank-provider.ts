@@ -79,7 +79,8 @@ export class AppleItunesRankProvider implements KeywordRankProvider {
     const rank = index === -1 ? null : index + 1
     return ok({
       rank,
-      resultCount,
+      // The results actually seen: an unranked observation proves nothing beyond them.
+      resultCount: Math.min(resultCount, results.length),
       searchDepth: ITUNES_MAX_LIMIT,
       source: ITUNES_RANK_SOURCE,
       confidence: rank !== null && rank <= STABLE_POSITION_LIMIT ? "medium" : "low",

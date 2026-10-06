@@ -15,6 +15,8 @@
  *
  * When inputs are missing the remaining weights are renormalized, as long as they cover
  * at least `minCoverage` of the total weight; the result is then flagged `partial`.
+ * A missing input is never treated as zero. In particular, a keyword that Apple's
+ * popularity data doesn't include has no popularity input, not a popularity of 0.
  */
 
 import {
@@ -23,6 +25,7 @@ import {
   normalizePopularity,
   normalizeRelevance,
 } from "../normalization/scales"
+import type { PopularityState } from "../popularity"
 import type { RankValue } from "../rank"
 import { rankOpportunity } from "./rank-opportunity"
 
@@ -195,4 +198,55 @@ export function describeMissingInputs(missing: OpportunityComponentKey[]): strin
     key === "ease" ? "difficulty" : key === "rankOpportunity" ? "rank" : key,
   )
   return `Missing ${labels.join(", ")}`
+}
+
+/** Why an input is missing, so a partial score can explain itself. */
+export type MissingInputReason =
+  | "relevance_not_set"
+  | "popularity_not_returned"
+  | "popularity_not_connected"
+  | "popularity_unavailable"
+  | "rank_not_checked"
+  | "difficulty_not_estimated"
+
+export const MISSING_INPUT_REASON_LABELS: Record<MissingInputReason, string> = {
+  relevance_not_set: "Relevance not set",
+  popularity_not_returned: "Not in Apple's popularity data",
+  popularity_not_connected: "Apple Ads not connected",
+  popularity_unavailable: "No popularity recorded",
+  rank_not_checked: "No rank check yet",
+  difficulty_not_estimated: "Not estimated yet",
+}
+
+export function missingInputReasons(
+  result: Pick<OpportunityResult, "missing">,
+  popularity: PopularityState,
+): Partial<Record<OpportunityComponentKey, MissingInputReason>> {
+  const reasons: Partial<Record<OpportunityComponentKey, MissingInputReason>> = {}
+  for (const key of result.missing) {
+    reasons[key] =
+      key === "relevance"
+        ? "relevance_not_set"
+        : key === "rankOpportunity"
+          ? "rank_not_checked"
+          : key === "ease"
+            ? "difficulty_not_estimated"
+            : popularity === "not_returned"
+              ? "popularity_not_returned"
+              : popularity === "not_connected"
+                ? "popularity_not_connected"
+                : "popularity_unavailable"
+  }
+  return reasons
+}
+
+/** "Based on relevance and rank opportunity (55% of the weight)." */
+export function describeAvailableInputs(result: OpportunityResult): string {
+  const available = result.components.filter((c) => c.value !== null).map((c) => c.label)
+  if (available.length === 0) return "No inputs available."
+  const list =
+    available.length === 1
+      ? available[0]!
+      : `${available.slice(0, -1).join(", ")} and ${available[available.length - 1]}`
+  return `Based on ${list.toLowerCase()} (${Math.round(result.coverage * 100)}% of the weight).`
 }

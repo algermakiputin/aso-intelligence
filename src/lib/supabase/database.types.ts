@@ -330,6 +330,7 @@ export type Database = {
         Row: {
           created_at: string
           created_by: string | null
+          details: NonNullable<Json>
           granularity: string
           id: number
           keyword_id: string
@@ -343,6 +344,7 @@ export type Database = {
         Insert: {
           created_at?: string
           created_by?: string | null
+          details?: NonNullable<Json>
           granularity: string
           id?: never
           keyword_id: string
@@ -356,6 +358,7 @@ export type Database = {
         Update: {
           created_at?: string
           created_by?: string | null
+          details?: NonNullable<Json>
           granularity?: string
           id?: never
           keyword_id?: string
@@ -700,7 +703,11 @@ export type Database = {
           latest_search_depth: number | null
           notes: string | null
           platform: Database["aso"]["Enums"]["platform"] | null
+          popularity_details: Json | null
+          popularity_granularity: string | null
           popularity_measured_at: string | null
+          popularity_period_end: string | null
+          popularity_period_start: string | null
           popularity_score: number | null
           popularity_source: string | null
           popularity_status: string | null

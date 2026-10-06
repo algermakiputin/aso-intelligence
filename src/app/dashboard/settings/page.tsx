@@ -113,7 +113,7 @@ export default async function SettingsPage() {
         title="Integrations"
         description="Store data sources. Credentials live in server environment variables, never in the browser."
       >
-        <div className="overflow-x-auto">
+        <div className="relative overflow-x-auto">
           <table className="w-full min-w-[620px] text-[13px]">
             <thead>
               <tr className="border-b text-left text-xs text-muted-foreground">
@@ -170,20 +170,23 @@ export default async function SettingsPage() {
               The app&apos;s position in Apple&apos;s public iTunes Search API results for the
               keyword and storefront (up to 200 results). That API approximates App Store search but
               isn&apos;t the same system, so every value is labelled estimated and stored with its
-              source, confidence and time. Positions beyond about 100 vary between identical
-              requests, so they are stored with low confidence. When the app isn&apos;t returned,
-              the label is the largest round threshold the results prove: “&gt;100” if Apple
-              returned 193 results without it. “Not found” means the search returned nothing.
-              Neither is ever shown as a number.
+              source, confidence and time. Positions 1–50 are stored with medium confidence; deeper
+              positions vary between identical requests, so they and unranked checks are stored with
+              low confidence. When the app isn&apos;t returned, the label is the largest round
+              threshold the results prove: “&gt;100” if Apple returned 193 results without it. “Not
+              found” means the search returned nothing. Neither is ever shown as a number. Movement
+              into or out of the results only counts as New or Lost when the check saw deep enough
+              to prove it; otherwise it isn&apos;t compared.
             </p>
           </div>
           <div className="space-y-1.5">
             <h3 className="font-semibold">Popularity</h3>
             <p className="text-muted-foreground">
-              Apple&apos;s relative search popularity (1–100) from the Apple Ads Platform API, or a
-              value entered manually. It is a relative score, not search volume. Apple publishes it
-              as a list of popular terms per genre, so terms outside the list are “below threshold”,
-              which means low but not zero.
+              Apple&apos;s relative search popularity (1–100, storefront-wide) from the Apple Ads
+              Search Term Popularity API, or a value entered manually. It is a relative score, not
+              search volume. Apple only reports terms above its eligibility threshold, up to 500 per
+              genre and storefront, so many tracked keywords have no Apple value. Those show as “Not
+              returned”. That is not a zero, and the Opportunity Score treats it as a missing input.
             </p>
           </div>
           <div className="space-y-1.5">

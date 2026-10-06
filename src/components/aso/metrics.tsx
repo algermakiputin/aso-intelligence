@@ -11,9 +11,17 @@ import {
   type RankValue,
 } from "@/lib/aso/rank"
 import { difficultyLabel } from "@/lib/aso/scoring/difficulty"
-import { describeMissingInputs, type OpportunityResult } from "@/lib/aso/scoring/opportunity"
+import { POPULARITY_STATE_DESCRIPTIONS, popularityState } from "@/lib/aso/popularity"
+import {
+  describeAvailableInputs,
+  MISSING_INPUT_REASON_LABELS,
+  type MissingInputReason,
+  OPPORTUNITY_COMPONENT_LABELS,
+  type OpportunityComponentKey,
+  type OpportunityResult,
+} from "@/lib/aso/scoring/opportunity"
 import { getSourceInfo, rankLabel } from "@/lib/aso/sources"
-import { formatDateTime, formatRelative } from "@/lib/format"
+import { formatDateTime, formatPopularityPeriod, formatRelative } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import {
   PLATFORM_LABELS,
@@ -137,59 +145,104 @@ export function RankChangeIndicator({
 // Popularity (Apple relative popularity; never "search volume")
 // ---------------------------------------------------------------------------
 
+export interface PopularityDisplay {
+  status: PopularityStatus
+  score: number | null
+  source: string
+  measuredAt: string
+  granularity?: string
+  periodStart?: string | null
+  periodEnd?: string | null
+  genre?: {
+    genre: string
+    rankInGenre: number | null
+    searchPopularityInGenre: number | null
+    searchPopularity1to5: number | null
+  } | null
+}
+
+const GENRE_LABELS: Record<string, string> = {
+  FOOD_DRINK: "Food & Drink",
+  HEALTH_FITNESS: "Health & Fitness",
+  PHOTO_VIDEO: "Photo & Video",
+  PRODUCTIVITY_UTILITIES: "Productivity & Utilities",
+}
+
+/** Apple Ads genre id → label ("SOCIAL_NETWORKING" → "Social Networking"). */
+function genreName(genre: string): string {
+  return (
+    GENRE_LABELS[genre] ??
+    genre
+      .split("_")
+      .map((w) => w.charAt(0) + w.slice(1).toLowerCase())
+      .join(" ")
+  )
+}
+
 export function PopularityValue({
   popularity,
   connected,
   now,
 }: {
-  popularity: {
-    status: PopularityStatus
-    score: number | null
-    source: string
-    measuredAt: string
-  } | null
+  popularity: PopularityDisplay | null
   connected: boolean
   now: string
 }) {
-  if (!popularity) {
+  const state = popularityState(popularity, connected)
+  if (!popularity || state === "not_connected" || state === "unavailable") {
     return (
-      <Hint
-        content={
-          connected
-            ? "No popularity recorded for this keyword yet."
-            : "Apple keyword popularity not connected. Connect Apple Ads or record a value manually on the keyword page."
-        }
-      >
-        <span className={cn(muted, "text-[0.92em]")}>{connected ? "—" : "Not connected"}</span>
+      <Hint content={POPULARITY_STATE_DESCRIPTIONS[state]}>
+        <span className={cn(muted, "text-[0.92em]")}>
+          {state === "not_connected" ? "Not connected" : "—"}
+        </span>
       </Hint>
     )
   }
   const source = getSourceInfo(popularity.source)
-  if (popularity.status === "below_threshold") {
+  const period = formatPopularityPeriod({
+    granularity: popularity.granularity ?? "point",
+    periodStart: popularity.periodStart ?? null,
+    periodEnd: popularity.periodEnd ?? null,
+  })
+  const provenance = `${source.label}, ${period ?? formatRelative(popularity.measuredAt, now)}`
+  if (state === "not_returned") {
     return (
       <Hint
         content={
           <Provenance
             lines={[
-              "Below Apple's reporting threshold",
-              "The term wasn't in Apple's popular-terms list for this period. That means low popularity, not zero.",
-              `${source.label}, ${formatRelative(popularity.measuredAt, now)}`,
+              "Not returned by Apple",
+              POPULARITY_STATE_DESCRIPTIONS.not_returned,
+              provenance,
             ]}
           />
         }
       >
-        <span className={cn(muted, "text-[0.92em]")}>Low</span>
+        <span className={cn(muted, "text-[0.92em]")}>Not returned</span>
       </Hint>
     )
   }
+  const genre = popularity.genre
   return (
     <Hint
       content={
         <Provenance
           lines={[
             `Popularity ${popularity.score} / 100`,
-            "Apple's relative popularity score, not search volume.",
-            `${source.label}, ${formatRelative(popularity.measuredAt, now)}`,
+            POPULARITY_STATE_DESCRIPTIONS.available,
+            genre
+              ? [
+                  genreName(genre.genre),
+                  genre.rankInGenre !== null ? `#${genre.rankInGenre} in genre` : null,
+                  genre.searchPopularityInGenre !== null
+                    ? `${genre.searchPopularityInGenre}/100 in genre`
+                    : null,
+                  genre.searchPopularity1to5 !== null ? `${genre.searchPopularity1to5}/5` : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")
+              : null,
+            provenance,
           ]}
         />
       }
@@ -251,18 +304,29 @@ export function RelevanceValue({ relevance }: { relevance: number | null }) {
 
 export function OpportunityValue({
   opportunity,
+  missingReasons = {},
   showBar = true,
 }: {
   opportunity: OpportunityResult
+  /** Why each missing input is missing (see `missingInputReasons`). */
+  missingReasons?: Partial<Record<OpportunityComponentKey, MissingInputReason>>
   showBar?: boolean
 }) {
+  const reasonFor = (key: OpportunityComponentKey) => {
+    const reason = missingReasons[key]
+    return reason ? MISSING_INPUT_REASON_LABELS[reason] : "missing"
+  }
   if (opportunity.score === null) {
     return (
       <Hint
         content={
           opportunity.missing.includes("relevance")
             ? "Set the keyword's relevance to compute an Opportunity Score."
-            : `Not enough data yet. ${describeMissingInputs(opportunity.missing)}.`
+            : `Not enough data yet. ${opportunity.missing
+                .map(
+                  (key) => `${OPPORTUNITY_COMPONENT_LABELS[key]}: ${reasonFor(key).toLowerCase()}`,
+                )
+                .join("; ")}.`
         }
       >
         <span className={cn(muted, "text-[0.92em]")}>—</span>
@@ -274,7 +338,9 @@ export function OpportunityValue({
     <Hint
       content={
         <div className="space-y-1.5">
-          <div className="font-medium">Opportunity Score {opportunity.score} / 100</div>
+          <div className="font-medium">
+            Opportunity Score {opportunity.score} / 100{partial ? " (partial)" : ""}
+          </div>
           <table className="w-full tabular">
             <tbody>
               {opportunity.components.map((c) => (
@@ -282,7 +348,7 @@ export function OpportunityValue({
                   <td className="pr-3">{c.label}</td>
                   <td className="pr-2 text-right">{Math.round(c.weight * 100)}%</td>
                   <td className="text-right">
-                    {c.points === null ? "missing" : `+${c.points.toFixed(1)}`}
+                    {c.points === null ? reasonFor(c.key) : `+${c.points.toFixed(1)}`}
                   </td>
                 </tr>
               ))}
@@ -290,8 +356,8 @@ export function OpportunityValue({
           </table>
           {partial ? (
             <div className="opacity-80">
-              Partial: {describeMissingInputs(opportunity.missing).toLowerCase()}; weights
-              renormalized.
+              Partial. {describeAvailableInputs(opportunity)} Missing inputs are excluded, not
+              counted as zero, and the remaining weights are renormalized.
             </div>
           ) : null}
         </div>

@@ -22,6 +22,8 @@ export type ProviderErrorCode =
   | "bad_response"
   | "not_found"
   | "invalid_input"
+  /** The provider has no dataset for the query (not published yet, or storefront not covered). */
+  | "unavailable"
 
 export interface ProviderError {
   code: ProviderErrorCode
@@ -108,25 +110,51 @@ export interface KeywordPopularityQuery {
   platform: Platform
   country: string
   terms: string[]
-  /** Store category of the app (e.g. "Finance"), required by genre-scoped datasets. */
+  /**
+   * Store category of the app (e.g. "Finance"). Optional; genre-scoped datasets use it to
+   * pick in-genre metrics when a term is reported in several genres.
+   */
   genre: string | null
+  /** Defaults to weekly. */
+  granularity?: "weekly" | "monthly"
+}
+
+export interface PopularityPeriod {
+  granularity: "weekly" | "monthly"
+  /** First day of the period (YYYY-MM-DD, UTC). */
+  start: string
+  /** Last day of the period (YYYY-MM-DD, UTC). */
+  end: string
+  /** Instant the period ended (start of the following day, UTC). */
+  endsAt: Date
 }
 
 export interface PopularityObservation {
   term: string
+  /**
+   * `measured`: the provider returned a value. `below_threshold`: the provider's dataset
+   * for this period didn't include the term. That is not a zero.
+   */
   status: PopularityStatus
-  /** 1–100 when measured; null when below the dataset's threshold. */
+  /** 1–100 when measured; null when not returned. */
   score: number | null
   granularity: PopularityGranularity
   periodStart: string | null
   periodEnd: string | null
   measuredAt: Date
+  /** Provider-specific fields stored with the observation (e.g. Apple's rank in genre). */
+  details: Record<string, unknown>
+}
+
+export interface KeywordPopularityResult {
+  source: string
+  /** Period the observations describe; null when no terms were queried. */
+  period: PopularityPeriod | null
+  observations: PopularityObservation[]
 }
 
 export interface KeywordPopularityProvider extends ProviderDescriptor {
-  getPopularity(
-    query: KeywordPopularityQuery,
-  ): Promise<ProviderResult<{ source: string; observations: PopularityObservation[] }>>
+  getPopularity(query: KeywordPopularityQuery): Promise<ProviderResult<KeywordPopularityResult>>
 }
 
 // ---------------------------------------------------------------------------

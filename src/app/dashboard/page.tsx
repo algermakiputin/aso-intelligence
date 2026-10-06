@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button"
 import { EventItem } from "@/features/experiments/components/event-item"
 import { listEvents } from "@/features/experiments/data"
 import { listKeywords } from "@/features/keywords/data"
+import { opportunityMissingReasons } from "@/features/keywords/model"
 import { listListings } from "@/features/listings/data"
 import { summarizeOverview } from "@/features/overview/summary"
 import { RefreshRankingsButton } from "@/features/rankings/components/refresh-rankings-button"
@@ -64,9 +65,6 @@ export default async function OverviewPage() {
   ]
   const setupComplete = steps.every((s) => s.done)
 
-  const outside = summary.distribution
-    .filter((d) => d.band === "beyond_100" || d.band === "unranked")
-    .reduce((n, d) => n + d.count, 0)
   const segments: DistributionSegment[] = [
     {
       key: "top_3",
@@ -92,7 +90,23 @@ export default async function OverviewPage() {
       count: summary.distribution.find((d) => d.band === "top_100")!.count,
       colorClass: "bg-rank-4",
     },
-    { key: "outside", label: "Outside top 100", count: outside, colorClass: "bg-rank-none" },
+    {
+      key: "outside",
+      label: "Outside top 100",
+      count: summary.outsideTop100,
+      colorClass: "bg-rank-none",
+    },
+    // Unranked in a check that returned fewer than 100 results: not provably outside 100.
+    ...(summary.unrankedUnproven > 0
+      ? [
+          {
+            key: "unproven",
+            label: "Not ranked (<100 seen)",
+            count: summary.unrankedUnproven,
+            colorClass: "bg-rank-none/50",
+          },
+        ]
+      : []),
   ]
 
   const listing = listings.find((l) => l.country === ctx.activeApp.defaultCountry) ?? listings[0]
@@ -165,12 +179,20 @@ export default async function OverviewPage() {
         <Stat
           label="In top 10"
           value={summary.top10 ?? <WaitingForData />}
-          detail={summary.top10 !== null ? `of ${summary.checked} checked` : "Needs a rank check"}
+          detail={
+            summary.top10 !== null
+              ? `Estimated, of ${summary.checked} checked`
+              : "Needs a rank check"
+          }
         />
         <Stat
           label="In top 50"
           value={summary.top50 ?? <WaitingForData />}
-          detail={summary.top50 !== null ? `of ${summary.checked} checked` : "Needs a rank check"}
+          detail={
+            summary.top50 !== null
+              ? `Estimated, of ${summary.checked} checked`
+              : "Needs a rank check"
+          }
         />
         <Stat
           label="Improved"
@@ -183,7 +205,7 @@ export default async function OverviewPage() {
               </span>
             )
           }
-          detail={summary.improved === null ? "Needs two checks" : "vs. previous check"}
+          detail={summary.improved === null ? "Needs two checks" : "Estimated, vs. previous check"}
         />
         <Stat
           label="Declined"
@@ -196,7 +218,7 @@ export default async function OverviewPage() {
               </span>
             )
           }
-          detail={summary.declined === null ? "Needs two checks" : "vs. previous check"}
+          detail={summary.declined === null ? "Needs two checks" : "Estimated, vs. previous check"}
         />
         <Stat
           label="Estimated Search Visibility"
@@ -248,7 +270,7 @@ export default async function OverviewPage() {
                   : "Waiting for data. Opportunity needs a keyword's relevance plus a rank check or popularity."}
               </p>
             ) : (
-              <div className="overflow-x-auto">
+              <div className="relative overflow-x-auto">
                 <table className="w-full min-w-[520px] text-[13px]">
                   <thead>
                     <tr className="border-b text-xs text-muted-foreground">
@@ -281,7 +303,10 @@ export default async function OverviewPage() {
                           <EstimatedRank observation={k.latestRank} now={now} />
                         </td>
                         <td className="h-9 px-4 text-right">
-                          <OpportunityValue opportunity={k.opportunity} />
+                          <OpportunityValue
+                            opportunity={k.opportunity}
+                            missingReasons={opportunityMissingReasons(k, popularityConnected)}
+                          />
                         </td>
                       </tr>
                     ))}

@@ -1,4 +1,4 @@
-import { rankBand } from "@/lib/aso/rank"
+import { isProvablyOutsideTop, rankBand } from "@/lib/aso/rank"
 import type { Platform } from "@/types/aso"
 import type { KeywordRow } from "../model"
 
@@ -43,7 +43,8 @@ function matchesRank(row: KeywordRow, filter: RankFilter): boolean {
     case "top_100":
       return band !== "beyond_100" && band !== "unranked"
     case "outside_100":
-      return band === "beyond_100" || band === "unranked"
+      // Unranked only counts when the check saw at least 100 results.
+      return isProvablyOutsideTop(row.latestRank.value, 100)
   }
 }
 

@@ -10,8 +10,10 @@ export interface DistributionSegment {
 
 /**
  * Where tracked keywords currently rank, as one segmented bar. Ordinal blue ramp
- * (darkest = best band); keywords outside the top 100 are neutral grey. Counts are
- * always printed in the legend, so color never carries the value alone.
+ * (darkest = best band); keywords provably outside the top 100 are neutral grey, and
+ * unranked keywords whose check returned fewer than 100 results get a lighter grey of
+ * their own. Counts are always printed in the legend, so color never carries the value
+ * alone.
  */
 export function RankDistribution({
   segments,

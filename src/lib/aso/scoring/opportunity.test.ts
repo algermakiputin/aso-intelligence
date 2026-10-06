@@ -3,6 +3,8 @@ import type { RankValue } from "../rank"
 import {
   computeOpportunity,
   createWeightedStrategy,
+  describeAvailableInputs,
+  missingInputReasons,
   OPPORTUNITY_V1,
   type OpportunityInputs,
   opportunityTier,
@@ -148,6 +150,61 @@ describe("computeOpportunity (opportunity_v1)", () => {
 
   it("identifies itself", () => {
     expect(computeOpportunity(full).strategyId).toBe(OPPORTUNITY_V1.id)
+  })
+})
+
+describe("partial inputs", () => {
+  const base = { relevance: 8, rank: ranked(20), difficulty: 40 }
+
+  it("never treats missing popularity as zero", () => {
+    const missing = computeOpportunity({ ...base, popularity: null })
+    const zero = computeOpportunity({ ...base, popularity: 0 })
+    expect(missing.status).toBe("partial")
+    expect(missing.missing).toEqual(["popularity"])
+    expect(zero.status).toBe("complete")
+    expect(missing.score).not.toBe(zero.score)
+    expect(missing.components.find((c) => c.key === "popularity")).toMatchObject({
+      value: null,
+      points: null,
+    })
+  })
+
+  it("explains why each input is missing", () => {
+    const result = computeOpportunity({
+      popularity: null,
+      relevance: 8,
+      rank: ranked(20),
+      difficulty: null,
+    })
+    expect(missingInputReasons(result, "not_returned")).toEqual({
+      popularity: "popularity_not_returned",
+      ease: "difficulty_not_estimated",
+    })
+    expect(missingInputReasons(result, "not_connected").popularity).toBe("popularity_not_connected")
+    expect(missingInputReasons(result, "unavailable").popularity).toBe("popularity_unavailable")
+
+    const noRelevance = computeOpportunity({
+      popularity: 50,
+      relevance: null,
+      rank: null,
+      difficulty: 30,
+    })
+    expect(missingInputReasons(noRelevance, "available")).toEqual({
+      relevance: "relevance_not_set",
+      rankOpportunity: "rank_not_checked",
+    })
+  })
+
+  it("documents which inputs a score is based on", () => {
+    const result = computeOpportunity({
+      popularity: null,
+      relevance: 8,
+      rank: ranked(20),
+      difficulty: null,
+    })
+    expect(describeAvailableInputs(result)).toBe(
+      "Based on relevance and rank opportunity (55% of the weight).",
+    )
   })
 })
 

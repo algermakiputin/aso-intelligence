@@ -10,7 +10,12 @@
  * between requests). So an unranked observation only proves "not in the top N", where
  * N is the number of results actually seen. We display the largest round threshold
  * that is still provably true (193 results seen → ">100"). "Not found" is reserved
- * for searches that returned no results at all.
+ * for searches that returned no results at all. When the result count wasn't recorded,
+ * nothing is proven and the value reads "Not ranked".
+ *
+ * The same rule applies to movement: a transition between ranked and unranked is only
+ * reported as "New" or "Lost" when the unranked check saw deep enough to prove it.
+ * Otherwise the change is `inconclusive`, never a guessed number or direction.
  */
 
 export type RankValue =
@@ -43,26 +48,39 @@ export function toRankValue(observation: RankObservationFields): RankValue {
 
 const ROUND_THRESHOLDS = [200, 100, 50, 20, 10] as const
 
-/** Number of results the "not in the top N" claim is based on. */
+/**
+ * Number of results the "not in the top N" claim is based on. 0 when the result count
+ * is unknown, because then nothing is proven.
+ */
 export function visibleDepth(value: Extract<RankValue, { kind: "unranked" }>): number {
-  return value.resultsSeen ?? value.searchDepth
+  return value.resultsSeen ?? 0
+}
+
+function roundThreshold(seen: number): number {
+  return ROUND_THRESHOLDS.find((t) => t <= seen) ?? seen
 }
 
 /** Largest round threshold the app is provably outside of (or the exact count below 10). */
 export function unrankedThreshold(value: Extract<RankValue, { kind: "unranked" }>): number {
-  const seen = visibleDepth(value)
-  return ROUND_THRESHOLDS.find((t) => t <= seen) ?? seen
+  return roundThreshold(visibleDepth(value))
 }
 
-/** Table/compact form: "18", ">100", "Not found". */
+/** True when the app is provably outside the top `n` (ranked deeper, or unranked with ≥ n seen). */
+export function isProvablyOutsideTop(value: RankValue, n: number): boolean {
+  return value.kind === "ranked" ? value.position > n : visibleDepth(value) >= n
+}
+
+/** Table/compact form: "18", ">100", "Not found", "Not ranked". */
 export function formatRank(value: RankValue): string {
   if (value.kind === "ranked") return String(value.position)
-  return visibleDepth(value) === 0 ? "Not found" : `>${unrankedThreshold(value)}`
+  if (value.resultsSeen === null) return "Not ranked"
+  return value.resultsSeen === 0 ? "Not found" : `>${unrankedThreshold(value)}`
 }
 
 /** Sentence form used in tooltips. */
 export function describeRank(value: RankValue): string {
   if (value.kind === "ranked") return `Position ${value.position}`
+  if (value.resultsSeen === null) return "Not among the results returned (result count unknown)"
   const seen = visibleDepth(value)
   if (seen === 0) return "The search returned no results"
   return `Not among the ${seen} results returned (so outside the top ${unrankedThreshold(value)})`
@@ -97,15 +115,23 @@ export type RankChange =
   | { kind: "improved"; positions: number }
   | { kind: "declined"; positions: number }
   | { kind: "unchanged" }
-  | { kind: "entered"; position: number }
-  | { kind: "dropped"; previousPosition: number }
+  /** Was provably outside the top `outsideTop`, now ranked within it. */
+  | { kind: "entered"; position: number; outsideTop: number }
+  /** Was ranked, now provably outside the top `outsideTop` (≥ the previous position). */
+  | { kind: "dropped"; previousPosition: number; outsideTop: number }
+  /** A ranked ↔ unranked transition the unranked check didn't see deep enough to prove. */
+  | { kind: "inconclusive"; resultsSeen: number | null }
   | { kind: "still_unranked" }
   | { kind: "no_baseline" }
 
 /**
  * Movement from `previous` to `current`.
- *   50 → 20  = improved by 30 positions (displayed +30)
- *   20 → 50  = declined by 30 positions (displayed −30)
+ *   50 → 20             = improved by 30 positions (displayed +30)
+ *   20 → 50             = declined by 30 positions (displayed −30)
+ *   >100 (193 seen) → 40 = entered (displayed New)
+ *   35 → >100 (193 seen) = dropped (displayed Lost)
+ *   195 → >100 (180 seen) = inconclusive: the app may still be at 195
+ *   >100 (150 seen) → 180 = inconclusive: it may have been at 180 before too
  */
 export function computeRankChange(
   previous: RankValue | null,
@@ -120,10 +146,16 @@ export function computeRankChange(
     return { kind: "unchanged" }
   }
   if (previous.kind === "unranked" && current.kind === "ranked") {
-    return { kind: "entered", position: current.position }
+    const seen = visibleDepth(previous)
+    return current.position <= seen
+      ? { kind: "entered", position: current.position, outsideTop: seen }
+      : { kind: "inconclusive", resultsSeen: previous.resultsSeen }
   }
   if (previous.kind === "ranked" && current.kind === "unranked") {
-    return { kind: "dropped", previousPosition: previous.position }
+    const seen = visibleDepth(current)
+    return seen >= previous.position
+      ? { kind: "dropped", previousPosition: previous.position, outsideTop: seen }
+      : { kind: "inconclusive", resultsSeen: current.resultsSeen }
   }
   return { kind: "still_unranked" }
 }
@@ -155,6 +187,7 @@ export function rankChangeDirection(change: RankChange): RankDirection {
     case "unchanged":
     case "still_unranked":
       return "flat"
+    case "inconclusive":
     case "no_baseline":
       return "none"
   }
@@ -174,6 +207,7 @@ export function formatRankChange(change: RankChange): string {
       return "New"
     case "dropped":
       return "Lost"
+    case "inconclusive":
     case "still_unranked":
     case "no_baseline":
       return "—"
@@ -189,9 +223,13 @@ export function describeRankChange(change: RankChange): string {
     case "unchanged":
       return "No change"
     case "entered":
-      return `Entered the results at position ${change.position}`
+      return `Entered the results at position ${change.position} (previously outside the top ${roundThreshold(change.outsideTop)})`
     case "dropped":
-      return `Dropped out of the results (was ${change.previousPosition})`
+      return `Dropped out of the top ${change.outsideTop} results (was ${change.previousPosition})`
+    case "inconclusive":
+      return change.resultsSeen === null
+        ? "Can't compare: the result count of one check is unknown"
+        : `Can't compare: Apple returned only ${change.resultsSeen} results, too few to tell where the app ranked`
     case "still_unranked":
       return "Still not ranked"
     case "no_baseline":
@@ -209,11 +247,15 @@ export function compareRankValues(a: RankValue | null, b: RankValue | null): num
   return weight(a) - weight(b)
 }
 
-/** Sort key for "biggest movers": positive = improvement. Non-numeric moves rank after numeric. */
+/**
+ * Sort key for "biggest movers": positive = improvement. Entering or dropping out uses
+ * the smallest movement the observations prove (e.g. 35 → outside the top 193 is at
+ * least −159). Inconclusive and unranked-to-unranked moves are 0. Never displayed.
+ */
 export function rankChangeSortValue(change: RankChange): number {
   const delta = signedRankDelta(change)
   if (delta !== null) return delta
-  if (change.kind === "entered") return 0.5
-  if (change.kind === "dropped") return -0.5
+  if (change.kind === "entered") return change.outsideTop + 1 - change.position
+  if (change.kind === "dropped") return -(change.outsideTop + 1 - change.previousPosition)
   return 0
 }

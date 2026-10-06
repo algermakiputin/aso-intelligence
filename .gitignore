@@ -22,13 +22,40 @@
 
 # misc
 .DS_Store
-*.pem
+Thumbs.db
 
-# debug
+# credentials: Apple Ads / App Store Connect keys, Google service accounts
+*.pem
+*.p8
+*.key
+*service-account*.json
+*service_account*.json
+*credentials*.json
+
+# editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# debug and logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+*.log
+/logs/
+
+# browser test output and stray screenshots (document images belong in docs/)
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+.playwright-mcp/
+/screenshots/
+/*.png
+/*.jpg
+/*.jpeg
 
 # env files: never commit secrets. Only the template is tracked.
 .env*
@@ -41,6 +68,10 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# supabase local state
+# supabase local state and local database artifacts
 supabase/.temp
 supabase/.branches
+*.dump
+*.sqlite
+*.sqlite3
+*.db

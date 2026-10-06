@@ -18,7 +18,8 @@ export default async function DashboardLayout({ children }: LayoutProps<"/dashbo
         activeApp={ctx.activeApp}
         email={ctx.user.email}
       />
-      <SidebarInset>
+      {/* min-w-0 lets wide tables scroll inside their own container instead of the page. */}
+      <SidebarInset className="min-w-0">
         <header className="sticky top-0 z-20 flex h-11 shrink-0 items-center gap-2 border-b bg-background/90 px-3 backdrop-blur md:px-4">
           <SidebarTrigger className="-ml-1" />
           <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />

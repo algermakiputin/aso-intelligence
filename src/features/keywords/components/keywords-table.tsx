@@ -57,6 +57,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { comparePopularity } from "@/lib/aso/popularity"
 import { compareRankValues, rankChangeSortValue } from "@/lib/aso/rank"
 import { cn } from "@/lib/utils"
 import { countryName } from "@/lib/validation/locales"
@@ -68,7 +69,7 @@ import {
   setKeywordsTracked,
 } from "../actions"
 import type { KeywordRow } from "../model"
-import { measuredPopularity } from "../model"
+import { measuredPopularity, opportunityMissingReasons } from "../model"
 import {
   DEFAULT_FILTERS,
   filterKeywords,
@@ -165,10 +166,13 @@ function buildColumns(meta: TableMeta) {
         </span>
       ),
     }),
-    helper.accessor((row) => (row.popularity ? (measuredPopularity(row) ?? 0) : undefined), {
+    helper.accessor((row) => row.popularity ?? undefined, {
       id: "popularity",
       header: "Popularity",
-      sortFn: "basic",
+      // Measured scores order by value; "not returned" sorts below every measured score
+      // without being treated as 0; keywords with no popularity at all sort last.
+      sortFn: (a, b) =>
+        comparePopularity(measuredPopularity(a.original), measuredPopularity(b.original)),
       sortDescFirst: true,
       sortUndefined: "last",
       cell: ({ row }) => (
@@ -221,7 +225,12 @@ function buildColumns(meta: TableMeta) {
       sortFn: "basic",
       sortDescFirst: true,
       sortUndefined: "last",
-      cell: ({ row }) => <OpportunityValue opportunity={row.original.opportunity} />,
+      cell: ({ row }) => (
+        <OpportunityValue
+          opportunity={row.original.opportunity}
+          missingReasons={opportunityMissingReasons(row.original, meta.popularityConnected)}
+        />
+      ),
     }),
     helper.display({
       id: "trend",
@@ -448,7 +457,7 @@ export function KeywordsTable({
       ) : null}
 
       {/* Desktop: dense table */}
-      <div className="hidden overflow-x-auto rounded-lg border bg-card md:block">
+      <div className="relative hidden overflow-x-auto rounded-lg border bg-card md:block">
         <table className="w-full min-w-[1080px] border-collapse text-[13px]">
           <thead className="sticky top-0 z-10 bg-card">
             {table.getHeaderGroups().map((group) => (
@@ -554,7 +563,12 @@ export function KeywordsTable({
                     {PLATFORM_LABELS[k.platform]} {k.country}
                   </span>
                   <span>
-                    Opportunity <OpportunityValue opportunity={k.opportunity} showBar={false} />
+                    Opportunity{" "}
+                    <OpportunityValue
+                      opportunity={k.opportunity}
+                      missingReasons={opportunityMissingReasons(k, popularityConnected)}
+                      showBar={false}
+                    />
                   </span>
                   {!k.tracked ? <span>Paused</span> : null}
                 </div>

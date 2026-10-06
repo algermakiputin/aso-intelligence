@@ -58,6 +58,21 @@ export function formatMonth(value: string | Date): string {
   return monthFormat.format(new Date(value))
 }
 
+/** Popularity period: "Sep 27 – Oct 3, 2026" (weekly), "September 2026" (monthly), else null. */
+export function formatPopularityPeriod(period: {
+  granularity: string
+  periodStart: string | null
+  periodEnd: string | null
+}): string | null {
+  if (!period.periodStart) return null
+  const start = `${period.periodStart}T00:00:00Z`
+  if (period.granularity === "monthly") return formatMonth(start)
+  if (period.periodEnd && period.periodEnd !== period.periodStart) {
+    return `${formatShortDate(start)} – ${formatDate(`${period.periodEnd}T00:00:00Z`)}`
+  }
+  return formatDate(start)
+}
+
 export function formatRelative(value: string | Date, now: string | Date): string {
   const diffMs = new Date(now).getTime() - new Date(value).getTime()
   const minutes = Math.round(diffMs / 60_000)

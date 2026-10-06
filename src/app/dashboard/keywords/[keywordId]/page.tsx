@@ -28,6 +28,7 @@ import {
   getPopularityHistory,
   getRankHistory,
 } from "@/features/keywords/data"
+import { opportunityMissingReasons } from "@/features/keywords/model"
 import { listListings } from "@/features/listings/data"
 import { listingMetadata, selectListing } from "@/features/listings/model"
 import { ManualPopularityForm } from "@/features/popularity/components/manual-popularity-form"
@@ -37,10 +38,22 @@ import {
   describeCoverageSummary,
   type FieldMatch,
 } from "@/lib/aso/coverage"
+import { POPULARITY_STATE_LABELS, popularityState } from "@/lib/aso/popularity"
 import { computeRankChange, describeRankChange } from "@/lib/aso/rank"
-import { describeMissingInputs } from "@/lib/aso/scoring/opportunity"
+import {
+  describeAvailableInputs,
+  describeMissingInputs,
+  MISSING_INPUT_REASON_LABELS,
+  type MissingInputReason,
+} from "@/lib/aso/scoring/opportunity"
 import { getSourceInfo } from "@/lib/aso/sources"
-import { formatCompact, formatDate, formatDateTime, toDateInputValue } from "@/lib/format"
+import {
+  formatCompact,
+  formatDate,
+  formatDateTime,
+  formatPopularityPeriod,
+  toDateInputValue,
+} from "@/lib/format"
 import { getPopularityProvider } from "@/lib/stores/registry"
 import { cn } from "@/lib/utils"
 import { countryName, languageName } from "@/lib/validation/locales"
@@ -90,6 +103,8 @@ export default async function KeywordDetailPage(
   ])
 
   const popularityConnected = getPopularityProvider(keyword.platform)?.status().state === "ready"
+  const popState = popularityState(keyword.popularity, popularityConnected)
+  const missingReasons = opportunityMissingReasons(keyword, popularityConnected)
   const relatedEvents = eventsForStorefront(events, keyword)
   const listingMatch = selectListing(listings, keyword)
   const coverage = analyzeKeywordCoverage(
@@ -169,19 +184,20 @@ export default async function KeywordDetailPage(
         <Stat
           label="Popularity"
           value={
-            keyword.popularity ? (
+            popState === "available" || popState === "not_returned" ? (
               <PopularityValue
                 popularity={keyword.popularity}
                 connected={popularityConnected}
                 now={now}
               />
             ) : (
-              <WaitingForData label={popularityConnected ? "Waiting for data" : "Not connected"} />
+              <WaitingForData label={POPULARITY_STATE_LABELS[popState]} />
             )
           }
           detail={
             keyword.popularity
-              ? getSourceInfo(keyword.popularity.source).label
+              ? (formatPopularityPeriod(keyword.popularity) ??
+                getSourceInfo(keyword.popularity.source).label)
               : popularityConnected
                 ? "No data yet"
                 : "Apple Ads not connected"
@@ -205,12 +221,18 @@ export default async function KeywordDetailPage(
         />
         <Stat
           label="Opportunity Score"
-          value={<OpportunityValue opportunity={keyword.opportunity} showBar={false} />}
+          value={
+            <OpportunityValue
+              opportunity={keyword.opportunity}
+              missingReasons={missingReasons}
+              showBar={false}
+            />
+          }
           detail={
             keyword.opportunity.status === "complete"
               ? "All inputs available"
               : keyword.opportunity.status === "partial"
-                ? describeMissingInputs(keyword.opportunity.missing)
+                ? `Partial: ${describeMissingInputs(keyword.opportunity.missing).toLowerCase()}`
                 : keyword.opportunity.missing.includes("relevance")
                   ? "Set relevance first"
                   : "Not enough data"
@@ -224,7 +246,7 @@ export default async function KeywordDetailPage(
             title="Estimated rank history"
             description={
               rangeChange
-                ? `${range.key === "all" ? "All time" : `Last ${range.days} days`}: ${describeRankChange(rangeChange).toLowerCase()}`
+                ? `${range.key === "all" ? "All time" : `Last ${range.days} days`}: ${lowerFirst(describeRankChange(rangeChange))}`
                 : "Lower is better. Position 1 is the top search result."
             }
             action={
@@ -309,7 +331,7 @@ export default async function KeywordDetailPage(
                 className="py-8"
               />
             ) : (
-              <div className="overflow-x-auto">
+              <div className="relative overflow-x-auto">
                 <table className="w-full text-[13px]">
                   <thead>
                     <tr className="border-b text-left text-xs text-muted-foreground">
@@ -368,7 +390,7 @@ export default async function KeywordDetailPage(
                   >
                     <td className="py-1.5">{c.label}</td>
                     <td className="py-1.5 text-right">
-                      {c.value === null ? "missing" : c.value.toFixed(2)}
+                      {c.value === null ? reasonLabel(missingReasons[c.key]) : c.value.toFixed(2)}
                     </td>
                     <td className="py-1.5 text-right">{Math.round(c.weight * 100)}%</td>
                     <td className="py-1.5 text-right">
@@ -387,8 +409,10 @@ export default async function KeywordDetailPage(
             <p className="mt-3 text-xs text-muted-foreground">
               Inputs are normalized to 0–1, weighted and scaled to 100.
               {keyword.opportunity.status === "partial"
-                ? " Missing inputs are excluded and the remaining weights renormalized, so this score is partial."
-                : null}{" "}
+                ? ` This score is partial. ${describeAvailableInputs(keyword.opportunity)} Missing inputs are excluded, not counted as zero, and the remaining weights are renormalized.`
+                : keyword.opportunity.status === "insufficient_data"
+                  ? ` No score yet. ${describeAvailableInputs(keyword.opportunity)}`
+                  : null}{" "}
               <Link
                 href="/dashboard/settings#scoring"
                 className="underline-offset-2 hover:underline"
@@ -536,6 +560,14 @@ export default async function KeywordDetailPage(
       </div>
     </PageContainer>
   )
+}
+
+function lowerFirst(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1)
+}
+
+function reasonLabel(reason: MissingInputReason | undefined): string {
+  return reason ? MISSING_INPUT_REASON_LABELS[reason] : "missing"
 }
 
 function CoverageIcon({ match }: { match: FieldMatch | "partial" | "none" }) {

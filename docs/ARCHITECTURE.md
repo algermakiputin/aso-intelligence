@@ -119,8 +119,8 @@ All tables live in the `aso` Postgres schema, which is exposed to PostgREST. Mig
 | `store_listings` | Platform/storefront listing | unique `(app_id, platform, country, language)`; `keyword_field` is iOS-only (≤100 chars) |
 | `metadata_snapshots` | History of our own listing metadata | Written by trigger whenever listing metadata changes |
 | `keywords` | Tracked search terms | unique `(app_id, platform, country, language, keyword)`; keyword stored normalized; `relevance_score` 1–10 set by the user |
-| `keyword_rank_history` | Append-only rank observations | `rank` NULL = not found within `search_depth`; `source`, `confidence`, `checked_at` |
-| `keyword_popularity_history` | Append-only popularity observations | `status` = `measured` or `below_threshold`; `granularity` and period |
+| `keyword_rank_history` | Append-only rank observations | `rank` NULL = app not among the `result_count` results returned (not proof of "not found"); `source`, `confidence`, `checked_at` |
+| `keyword_popularity_history` | Append-only popularity observations | `status` = `measured` (score set) or `below_threshold` = not returned by the provider's dataset (score NULL, never 0); `granularity` and period; `details` holds Apple's in-genre metrics; one row per keyword, source, granularity and period |
 | `keyword_difficulty_history` | Append-only difficulty estimates | `method` names the algorithm; `details` holds the top results it was computed from |
 | `competitors` / `competitor_snapshots` | Competitor tracking | Schema only in V0.1 |
 | `aso_events` | Annotated ASO changes (title change, release…) | `before_data`/`after_data` JSONB because payloads vary by event type |
@@ -130,8 +130,9 @@ JSONB is used only where payloads vary (`store_listings.metadata`, event before/
 difficulty details, competitor snapshot metadata). Everything filterable or sortable is a column.
 
 **View:** `keyword_overview` (`security_invoker = true`, so RLS applies) joins each keyword to its
-latest and previous rank, latest popularity, latest difficulty and its last 14 rank observations
-(for sparklines). The keyword table and overview read from it in a single query.
+latest and previous rank, latest popularity (with its period and details), latest difficulty and
+its last 14 rank observations (for sparklines). The keyword table and overview read from it in a
+single query.
 
 **Indexes** cover the dashboard access paths: `keywords(app_id, tracked)`,
 `*_history(keyword_id, <time> desc)`, `aso_events(app_id, happened_at desc)`,
@@ -201,9 +202,11 @@ place that knows which concrete providers exist.
   They are never turned into a sentinel number. Apple often returns fewer results than requested
   (about 193 of 200 for popular terms), so a short list doesn't mean the list is complete.
   An unranked observation therefore only proves "not in the top N", where N is the number of
-  results actually returned. The UI shows the largest round threshold that's provably true, so
-  193 results without the app reads `>100`. "Not found" is reserved for searches that returned
-  nothing.
+  results actually returned (the provider stores the results it actually received, not Apple's
+  claimed count). The UI shows the largest round threshold that's provably true, so 193 results
+  without the app reads `>100`. "Not found" is reserved for searches that returned nothing, and
+  an unknown result count reads "Not ranked". Filters and the overview count a keyword as
+  "outside the top 100" only when it ranked deeper or the check saw at least 100 results.
 - The same response yields the top 10 competing results. They feed the difficulty estimate and
   the "Top competing results" panel, so no second request is made.
 - Traffic controls:
@@ -216,18 +219,45 @@ place that knows which concrete providers exist.
   - Identical `(term, country)` searches within 10 minutes are served from a cache.
   - Keywords checked in the last 6 hours are skipped by manual refreshes.
 
-### Apple Ads popularity
+### Apple Search Term Popularity
 
-Apple's Ads Platform API exposes search-term popularity as a **ranked list of popular terms per
-genre and country** (weekly or monthly), not as a lookup for arbitrary keywords. The provider
-therefore fetches the list for the app's genre and storefront and matches tracked keywords against
-it. A keyword absent from the list is stored as `below_threshold`, not as zero.
+`AppleAdsPopularityProvider` follows Apple's official Apple Ads Platform API documentation
+([Search Term Popularity Query](https://developer.apple.com/documentation/apple-ads-platform-api/query-app-search-term-popularity-data),
+checked October 2026):
 
-Without credentials the provider reports `not_configured` and the UI shows
-"Apple keyword popularity not connected". Users can also record popularity manually
-(`source = manual`), for example a value read from the Apple Ads UI. The request payload follows
-third-party documentation of the API, so treat the provider as unverified until it has run against
-a real account.
+| Aspect | Implementation |
+|---|---|
+| Endpoint | `POST https://api.ads.apple.com/v1/insights/apps/search-term-popularity/query` |
+| Auth | OAuth client credentials: ES256 client-secret JWT (`kid` = key id, `sub` = client id, `iss` = team id, `aud` = `https://appleid.apple.com`, expiry 1 h), exchanged at `https://appleid.apple.com/auth/oauth2/token` with `grant_type=client_credentials` and `scope=searchadsorg`. The access token (1 h) is cached in-process |
+| Headers | `Authorization: Bearer <token>`, `X-AP-Context: adAccountId=<APPLE_ADS_ACCOUNT_ID>` (required), `Content-Type: application/json` |
+| Body | `fields: [rankInGenre, searchPopularityInGenre, searchPopularity1to100, searchPopularity1to5]` (Apple omits these unless requested); `filters: [{countryOrRegion EQUALS <CC>}, {searchTerm IN [<terms>]}]` (≤ 50 terms per request); required `timeRange: {start, end, granularity}`; `sorting: [{rankInGenre ASC}]`; `pagination: {offset, pageSize: 1000}` (Apple caps it at 5000) |
+| Pagination | Follows `offset` until fewer than `pageSize` rows come back or `pagination.totalCount` is reached |
+| Country | Two-letter storefront code, upper-cased. Apple covers about 90 countries and regions (not Russia or Belarus) |
+| Genre | Not used as a filter, so a term is found whatever genre Apple files it under. The app's App Store category is mapped to Apple's 15 genres (`Finance` → `FINANCE`, `Productivity`/`Utilities` → `PRODUCTIVITY_UTILITIES`, …; unmapped categories such as Medical have none) and only used to choose the in-genre metrics when a term comes back in several genres |
+| Granularity | `WEEKLY_SUN_SAT` by default (Sunday–Saturday UTC weeks, published Mondays 07:00 UTC, 65-week retention); `MONTHLY` supported (previous calendar month from the 5th, 15-month retention) |
+| Date constraints | Dates are `YYYY-MM-DD` in UTC (the time zone is fixed). The provider requests the latest published period and falls back one period if Apple has no rows for it yet |
+| Fields stored | `popularity_score` = `searchPopularity1to100` (storefront-wide, 1–100). `details` = `genre`, `rankInGenre`, `searchPopularityInGenre`, `searchPopularity1to5`, the row's `week`/`month`, and `genresReturned` when there are several |
+| Errors | 401/403 → `not_configured`; 429 → `rate_limited` (retried with backoff, honouring `Retry-After`); other 4xx → `bad_response`; 5xx/network → retryable `network`; anything off the documented shape → `bad_response` |
+
+**Semantics.** Apple's dataset contains only terms meeting its eligibility criteria (≥ 500
+searches and ≥ 10 impressions in the period), up to 500 per genre and storefront. A tracked
+keyword without a row is therefore stored as `below_threshold` ("Not returned"), with a NULL
+score. It is never stored as zero. Before judging any term, the provider checks that Apple
+returned rows for the storefront and period at all. If it didn't, the result is `unavailable` and
+nothing is stored, so a missing dataset can't masquerade as "every keyword below threshold".
+
+UI states (`src/lib/aso/popularity.ts`): `available`, `not_returned`, `not_connected` (no
+credentials) and `unavailable` (connected, nothing recorded). Sync errors aren't stored per
+keyword; a failed sync records nothing.
+
+`syncPopularityAction` runs the provider for every tracked iOS keyword, grouped by storefront. It
+skips periods that are already recorded, so history stays append-only. V0.1 has no UI button for
+it. Without credentials the provider reports `not_configured` and the UI shows "Apple keyword
+popularity not connected". Users can record popularity manually (`source = manual`), for example
+a value read from the Apple Ads UI.
+
+**Not verified live.** The implementation has only been tested against fake responses built from
+Apple's documented examples. Verify against a real account before relying on it.
 
 ### Android
 
@@ -239,7 +269,8 @@ keywords; only the provider implementation is missing.
 
 | Module | Responsibility |
 |---|---|
-| `rank.ts` | `RankValue` (ranked / unranked with depth / not found), formatting, bands, `computeRankChange` |
+| `rank.ts` | `RankValue` (ranked / unranked with results seen), formatting, bands, provable "outside top N", `computeRankChange` |
+| `popularity.ts` | Popularity states (available, not returned, not connected, unavailable) and sorting |
 | `scoring/opportunity.ts` | Opportunity Score strategy interface and the `opportunity_v1` strategy |
 | `scoring/rank-opportunity.ts` | Rank → headroom curve used by the Opportunity Score |
 | `scoring/difficulty.ts` | `serp_strength_v1` difficulty estimate from top results |
@@ -259,10 +290,17 @@ Smaller rank numbers are better. `computeRankChange(previous, current)` returns:
 | 50 → 20 | `improved`, 30 positions | `+30` (green, up arrow) |
 | 20 → 50 | `declined`, 30 positions | `−30` (red, down arrow) |
 | 20 → 20 | `unchanged` | `0` |
-| not ranked → 35 | `entered` | `New` |
-| 35 → not ranked | `dropped` | `Lost` |
+| not ranked (≥ 35 results seen) → 35 | `entered` | `New` |
+| 35 → not ranked (≥ 35 results seen) | `dropped` | `Lost` |
+| 195 → not ranked (180 seen), or not ranked (150 seen) → 180, or either side "Not found" / unknown count | `inconclusive` | `—` |
 | not ranked → not ranked | `still_unranked` | `—` |
 | no previous | `no_baseline` | `—` |
+
+A transition between ranked and unranked is only `entered`/`dropped` when the unranked check saw
+at least as many results as the ranked position. Otherwise the app may not have moved at all, so
+the change is `inconclusive`. Inconclusive changes don't count as improved or declined and aren't
+listed as movers. For sorting "biggest movers", New and Lost use the smallest movement the checks
+prove (35 → absent from 193 results ≥ 159 positions).
 
 "Change" in the table compares the latest observation with the previous one. The keyword detail
 page also shows change across the selected range.
@@ -290,11 +328,20 @@ distance" of the top 10:
 | Value | 0.05 | 0.20 | 0.60 | 0.85 | 1.00 | 0.80 | 0.55 | 0.45 | 0.40 |
 
 Missing inputs:
+- A missing input is excluded, never counted as zero. Popularity that Apple didn't return is a
+  missing input, not popularity 0.
 - Relevance is required. Without it the result is `insufficient_data`.
 - Otherwise the available weights are renormalized, provided they cover at least 0.55 of the total
-  weight. The result is then marked **partial** and lists what's missing. It is typical before
-  popularity is connected.
+  weight. The result is then marked **partial**, with `coverage` (share of weight with real
+  inputs) and `missing`. It is typical before popularity is connected.
 - Below 0.55 coverage the result is `insufficient_data`.
+- `missingInputReasons` explains each gap for the UI. Popularity: `popularity_not_connected`,
+  `popularity_not_returned` or `popularity_unavailable`. The others: `relevance_not_set`,
+  `rank_not_checked` and `difficulty_not_estimated`. `describeAvailableInputs` renders "Based on
+  relevance and rank opportunity (55% of the weight)."
+- Partial and complete scores aren't strictly comparable. Excluding a missing popularity means a
+  keyword Apple didn't return can outscore one with a measured low popularity, so partial scores
+  are always labelled.
 
 Strategies implement `OpportunityStrategy`. A v2 (adding conversion potential, for example) is a
 new strategy, not an edit to v1.

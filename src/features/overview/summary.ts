@@ -5,7 +5,13 @@
  */
 
 import { analyzeKeywordCoverage, isCoveredInPrimaryFields } from "@/lib/aso/coverage"
-import { RANK_BANDS, type RankBand, rankBand, rankChangeSortValue } from "@/lib/aso/rank"
+import {
+  isProvablyOutsideTop,
+  RANK_BANDS,
+  type RankBand,
+  rankBand,
+  rankChangeSortValue,
+} from "@/lib/aso/rank"
 import { evaluateAsoHealth, HIGH_RELEVANCE, type HealthReport } from "@/lib/aso/scoring/health"
 import { estimateSearchVisibility, type VisibilityResult } from "@/lib/aso/scoring/visibility"
 import { isStale } from "@/lib/aso/scheduling"
@@ -27,6 +33,10 @@ export interface OverviewSummary {
   comparable: number
   visibility: VisibilityResult
   distribution: Array<{ band: RankBand; label: string; count: number }>
+  /** Ranked beyond 100, or unranked in a check that saw at least 100 results. */
+  outsideTop100: number
+  /** Unranked in a check that saw fewer than 100 results, so the position is unknown. */
+  unrankedUnproven: number
   topOpportunities: KeywordRow[]
   movers: KeywordRow[]
   lastCheckedAt: string | null
@@ -120,6 +130,11 @@ export function summarizeOverview(
       })),
     ),
     distribution: RANK_BANDS.map((b) => ({ ...b, count: counts.get(b.band) ?? 0 })),
+    outsideTop100: checked.filter((k) => isProvablyOutsideTop(k.latestRank!.value, 100)).length,
+    unrankedUnproven: checked.filter(
+      (k) =>
+        k.latestRank!.value.kind === "unranked" && !isProvablyOutsideTop(k.latestRank!.value, 100),
+    ).length,
     topOpportunities: tracked
       .filter((k) => k.opportunity.score !== null)
       .sort((a, b) => b.opportunity.score! - a.opportunity.score!)

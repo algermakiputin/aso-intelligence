@@ -13,13 +13,16 @@ import {
   YAxis,
 } from "recharts"
 import { getSourceInfo } from "@/lib/aso/sources"
-import { formatDate, formatShortDate } from "@/lib/format"
+import { formatDate, formatPopularityPeriod, formatShortDate } from "@/lib/format"
 import type { PopularityStatus } from "@/types/aso"
 
 export interface PopularityChartPoint {
   status: PopularityStatus
   score: number | null
   source: string
+  granularity: string
+  periodStart: string | null
+  periodEnd: string | null
   measuredAt: string
 }
 
@@ -28,13 +31,14 @@ interface Row {
   score: number | null
   lane: number | null
   source: string
+  period: string | null
 }
 
 const LANE = -10
 
 /**
- * Apple relative popularity (1–100) over time. "Below threshold" observations sit in a
- * separate lane; they are not zero and are not plotted on the 0–100 scale.
+ * Apple relative popularity (1–100) over time. Terms Apple's dataset didn't return sit in
+ * a separate "Not returned" lane; they are not zero and are not plotted on the 0–100 scale.
  */
 export function PopularityChart({
   points,
@@ -48,6 +52,7 @@ export function PopularityChart({
     score: p.status === "measured" ? p.score : null,
     lane: p.status === "below_threshold" ? LANE : null,
     source: p.source,
+    period: formatPopularityPeriod(p),
   }))
   const hasLane = rows.some((r) => r.lane !== null)
 
@@ -83,7 +88,7 @@ export function PopularityChart({
               fillOpacity={0.6}
               strokeOpacity={0}
               label={{
-                value: "Below threshold",
+                value: "Not returned",
                 position: "insideLeft",
                 fill: "var(--muted-foreground)",
                 fontSize: 10,
@@ -118,10 +123,10 @@ function PopularityTooltip({ active, payload }: TooltipContentProps) {
   return (
     <div className="rounded-md border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-sm">
       <div className="text-base font-semibold tabular">
-        {row.score === null ? "Below threshold" : Math.round(row.score)}
+        {row.score === null ? "Not returned by Apple" : Math.round(row.score)}
       </div>
       <div className="text-muted-foreground">
-        Popularity, {formatDate(new Date(row.t))}, {getSourceInfo(row.source).label}
+        Popularity, {row.period ?? formatDate(new Date(row.t))}, {getSourceInfo(row.source).label}
       </div>
     </div>
   )

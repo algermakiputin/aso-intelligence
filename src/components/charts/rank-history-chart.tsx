@@ -103,6 +103,11 @@ export function RankHistoryChart({
     return t >= domain[0] && t <= domain[1]
   })
   const hasUnranked = rows.some((r) => r.lane !== null)
+  const isolated = new Set(
+    rows.flatMap((r, i) =>
+      r.rank !== null && rows[i - 1]?.rank == null && rows[i + 1]?.rank == null ? [i] : [],
+    ),
+  )
 
   return (
     <div style={{ height }} className="w-full text-xs">
@@ -170,7 +175,25 @@ export function RankHistoryChart({
             dot={
               rows.length <= 40
                 ? { r: 2.5, fill: "var(--data)", stroke: "var(--card)", strokeWidth: 1.5 }
-                : false
+                : (props: { index?: number; cx?: number; cy?: number }) =>
+                    // Dense series hide dots, but a ranked point between two unranked
+                    // ones has no line segment, so it still needs a dot to be visible.
+                    props.index !== undefined &&
+                    isolated.has(props.index) &&
+                    props.cx !== undefined &&
+                    props.cy !== undefined ? (
+                      <circle
+                        key={`dot-${props.index}`}
+                        cx={props.cx}
+                        cy={props.cy}
+                        r={2.5}
+                        fill="var(--data)"
+                        stroke="var(--card)"
+                        strokeWidth={1.5}
+                      />
+                    ) : (
+                      <g key={`dot-${props.index}`} />
+                    )
             }
             activeDot={{ r: 4, fill: "var(--data)", stroke: "var(--card)", strokeWidth: 2 }}
             connectNulls={false}

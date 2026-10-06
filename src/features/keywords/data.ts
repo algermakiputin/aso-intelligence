@@ -72,6 +72,8 @@ export interface PopularityPoint {
   score: number | null
   source: string
   granularity: string
+  periodStart: string | null
+  periodEnd: string | null
   measuredAt: string
 }
 
@@ -81,18 +83,23 @@ export async function getPopularityHistory(
 ): Promise<PopularityPoint[]> {
   const { data, error } = await db
     .from("keyword_popularity_history")
-    .select("status, popularity_score, source, granularity, measured_at")
+    .select("status, popularity_score, source, granularity, period_start, period_end, measured_at")
     .eq("keyword_id", keywordId)
     .order("measured_at", { ascending: true })
     .limit(500)
   if (error) throw new Error(`Failed to load popularity history: ${error.message}`)
-  return data.map((p) => ({
-    status: p.status === "below_threshold" ? "below_threshold" : "measured",
-    score: p.popularity_score,
-    source: p.source,
-    granularity: p.granularity,
-    measuredAt: p.measured_at,
-  }))
+  return data.map((p) => {
+    const status: PopularityStatus = p.status === "below_threshold" ? "below_threshold" : "measured"
+    return {
+      status,
+      score: status === "measured" ? p.popularity_score : null,
+      source: p.source,
+      granularity: p.granularity,
+      periodStart: p.period_start,
+      periodEnd: p.period_end,
+      measuredAt: p.measured_at,
+    }
+  })
 }
 
 const topResultsSchema = z.array(

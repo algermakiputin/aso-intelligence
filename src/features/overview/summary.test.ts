@@ -47,6 +47,10 @@ function keyword(overrides: KeywordOverrides = {}): KeywordRow {
             score: overrides.popularity,
             source: "manual",
             measuredAt: now.toISOString(),
+            granularity: "point",
+            periodStart: null,
+            periodEnd: null,
+            genre: null,
           }
         : null,
     difficulty: null,
@@ -119,6 +123,39 @@ describe("summarizeOverview", () => {
     expect(summary.comparable).toBe(3)
     expect(summary.distribution.find((d) => d.band === "unranked")!.count).toBe(1)
     expect(summary.movers[0]!.change).toEqual({ kind: "declined", positions: 16 })
+  })
+
+  it("doesn't count unprovable New/Lost transitions as movement", () => {
+    const seen = (n: number): RankValue => ({ kind: "unranked", searchDepth: 200, resultsSeen: n })
+    const summary = summarizeOverview(
+      [
+        keyword({ latest: seen(180), previous: ranked(195) }), // may still be at 195
+        keyword({ latest: ranked(180), previous: seen(150) }), // may have been at 180 before
+        keyword({ latest: seen(193), previous: ranked(35) }), // provably lost
+        keyword({ latest: ranked(12), previous: seen(200) }), // provably new
+      ],
+      [listing],
+      now,
+    )
+    expect(summary.improved).toBe(1)
+    expect(summary.declined).toBe(1)
+    expect(summary.movers.map((k) => k.change.kind)).toEqual(["entered", "dropped"])
+  })
+
+  it("only counts unranked keywords as outside the top 100 when 100+ results were seen", () => {
+    const seen = (n: number): RankValue => ({ kind: "unranked", searchDepth: 200, resultsSeen: n })
+    const summary = summarizeOverview(
+      [
+        keyword({ latest: ranked(150) }),
+        keyword({ latest: seen(193) }),
+        keyword({ latest: seen(60) }), // ">50": not provably outside the top 100
+        keyword({ latest: seen(0) }), // "Not found"
+      ],
+      [listing],
+      now,
+    )
+    expect(summary.outsideTop100).toBe(2)
+    expect(summary.unrankedUnproven).toBe(2)
   })
 
   it("computes visibility only from keywords with popularity", () => {

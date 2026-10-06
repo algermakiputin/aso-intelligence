@@ -27,18 +27,27 @@ export function RankSparkline({
   const x = (i: number) => pad + (i / (points.length - 1)) * (width - pad * 2)
   const y = (rank: number) => pad + ((rank - min) / span) * (height - pad * 2 - 3)
 
-  // Break the line at unranked observations.
+  // Break the line at unranked observations. A ranked point with unranked neighbours on
+  // both sides has no line to sit on, so it gets a dot instead.
   const segments: string[] = []
+  const isolated: number[] = []
   let current = ""
+  let currentStart = -1
+  const close = (end: number) => {
+    if (!current) return
+    if (end === currentStart) isolated.push(currentStart)
+    else segments.push(current)
+    current = ""
+  }
   points.forEach((p, i) => {
     if (p.value.kind === "ranked") {
+      if (!current) currentStart = i
       current += `${current ? "L" : "M"}${x(i).toFixed(1)},${y(p.value.position).toFixed(1)}`
-    } else if (current) {
-      segments.push(current)
-      current = ""
+    } else {
+      close(i - 1)
     }
   })
-  if (current) segments.push(current)
+  close(points.length - 1)
 
   const last = points[points.length - 1]!
   const label = `Trend over the last ${points.length} checks`
@@ -77,6 +86,12 @@ export function RankSparkline({
           />
         ) : null,
       )}
+      {isolated.map((i) => {
+        const v = points[i]!.value
+        return v.kind === "ranked" && i !== points.length - 1 ? (
+          <circle key={`dot-${i}`} cx={x(i)} cy={y(v.position)} r={1.5} fill="var(--data)" />
+        ) : null
+      })}
       {last.value.kind === "ranked" ? (
         <circle
           cx={x(points.length - 1)}

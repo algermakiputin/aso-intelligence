@@ -553,6 +553,123 @@ export type Database = {
           },
         ]
       }
+      store_analytics_imports: {
+        Row: {
+          app_id: string
+          collector_run_id: string | null
+          external_instance_id: string
+          first_metric_date: string | null
+          granularity: string
+          id: string
+          imported_at: string
+          imported_by: string | null
+          last_metric_date: string | null
+          platform: Database["aso"]["Enums"]["platform"]
+          processing_date: string
+          report: string
+          row_count: number
+          source: string
+        }
+        Insert: {
+          app_id: string
+          collector_run_id?: string | null
+          external_instance_id: string
+          first_metric_date?: string | null
+          granularity: string
+          id?: string
+          imported_at?: string
+          imported_by?: string | null
+          last_metric_date?: string | null
+          platform: Database["aso"]["Enums"]["platform"]
+          processing_date: string
+          report: string
+          row_count: number
+          source: string
+        }
+        Update: {
+          app_id?: string
+          collector_run_id?: string | null
+          external_instance_id?: string
+          first_metric_date?: string | null
+          granularity?: string
+          id?: string
+          imported_at?: string
+          imported_by?: string | null
+          last_metric_date?: string | null
+          platform?: Database["aso"]["Enums"]["platform"]
+          processing_date?: string
+          report?: string
+          row_count?: number
+          source?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "store_analytics_imports_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: false
+            referencedRelation: "apps"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "store_analytics_imports_collector_run_id_fkey"
+            columns: ["collector_run_id"]
+            isOneToOne: false
+            referencedRelation: "collector_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      store_analytics_metrics: {
+        Row: {
+          app_id: string
+          created_at: string
+          id: number
+          import_id: string
+          metric: string
+          metric_date: string
+          source_type: string
+          territory: string
+          value: number
+        }
+        Insert: {
+          app_id: string
+          created_at?: string
+          id?: never
+          import_id: string
+          metric: string
+          metric_date: string
+          source_type: string
+          territory: string
+          value: number
+        }
+        Update: {
+          app_id?: string
+          created_at?: string
+          id?: never
+          import_id?: string
+          metric?: string
+          metric_date?: string
+          source_type?: string
+          territory?: string
+          value?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "store_analytics_metrics_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: false
+            referencedRelation: "apps"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "store_analytics_metrics_import_id_fkey"
+            columns: ["import_id"]
+            isOneToOne: false
+            referencedRelation: "store_analytics_imports"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       store_listings: {
         Row: {
           app_id: string
@@ -730,6 +847,29 @@ export type Database = {
           },
         ]
       }
+      store_analytics_daily: {
+        Row: {
+          app_id: string | null
+          metric: string | null
+          metric_date: string | null
+          platform: Database["aso"]["Enums"]["platform"] | null
+          processing_date: string | null
+          report: string | null
+          source: string | null
+          source_type: string | null
+          territory: string | null
+          value: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "store_analytics_imports_app_id_fkey"
+            columns: ["app_id"]
+            isOneToOne: false
+            referencedRelation: "apps"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
       can_read_app: { Args: { target_app_id: string }; Returns: boolean }
@@ -760,7 +900,34 @@ export type Database = {
         }
         Returns: boolean
       }
+      import_store_analytics_instance: {
+        Args: {
+          p_app_id: string
+          p_collector_run_id?: string
+          p_external_instance_id: string
+          p_first_metric_date?: string
+          p_granularity: string
+          p_imported_by?: string
+          p_last_metric_date?: string
+          p_platform: Database["aso"]["Enums"]["platform"]
+          p_processing_date: string
+          p_report: string
+          p_rows: Json
+          p_source: string
+        }
+        Returns: string
+      }
       is_workspace_member: { Args: { target_workspace_id: string }; Returns: boolean }
+      store_analytics_breakdown: {
+        Args: {
+          p_app_id: string
+          p_from: string
+          p_series_from: string
+          p_source: string
+          p_to: string
+        }
+        Returns: Json
+      }
     }
     Enums: {
       aso_event_type:

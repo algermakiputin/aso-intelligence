@@ -1,16 +1,20 @@
 import { timingSafeEqual } from "node:crypto"
+import { type AnalyticsImportSummary, importStoreAnalytics } from "@/features/analytics/collector"
 import { collectKeywordRanks, type CollectSummary } from "@/features/rankings/collector"
 import { getServerEnv } from "@/lib/env/server"
 import { createLogger } from "@/lib/logger"
-import { getRankProvider } from "@/lib/stores/registry"
+import { getAnalyticsProvider, getRankProvider } from "@/lib/stores/registry"
 import { createSupabaseAdminClient } from "@/lib/supabase/admin"
 
 /**
- * Scheduler entry point for rank collection (Vercel Cron, pg_cron + pg_net, or any
- * external scheduler). Requires `Authorization: Bearer $CRON_SECRET`.
+ * Scheduler entry point for the daily jobs (Vercel Cron, pg_cron + pg_net, or any
+ * external scheduler). Requires `Authorization: Bearer $CRON_SECRET`. Uses the service
+ * role. Within one time budget, across all non-demo apps:
  *
- * Checks keywords that are due per the schedule policy (priority ≈ daily, normal every
- * 2–3 days) across all non-demo apps, within a time budget. Uses the service role.
+ *   1. Rank collection: keywords due per the schedule policy (priority ≈ daily,
+ *      normal every 2–3 days).
+ *   2. Store analytics import: new App Store Connect report instances (also keeps
+ *      Apple's report request from stopping for inactivity).
  */
 
 export const maxDuration = 300
@@ -18,6 +22,8 @@ export const dynamic = "force-dynamic"
 
 const PER_APP_LIMIT = 40
 const TIME_BUDGET_MS = 240_000
+/** Rank collection may use this much; the rest is left for the analytics import. */
+const RANK_BUDGET_MS = 180_000
 const logger = createLogger("job:rank-collection")
 
 function authorized(request: Request, secret: string): boolean {
@@ -54,7 +60,7 @@ async function run(request: Request): Promise<Response> {
   > = []
   for (const app of apps) {
     if (app.workspace?.is_demo) continue
-    if (Date.now() - startedAt > TIME_BUDGET_MS) break
+    if (Date.now() - startedAt > RANK_BUDGET_MS) break
     const summary = await collectKeywordRanks(
       db,
       { getRankProvider },
@@ -77,8 +83,38 @@ async function run(request: Request): Promise<Response> {
     if (summary.stoppedReason === "rate_limited") break
   }
 
+  const analytics: Array<
+    { appId: string; app: string } & Pick<
+      AnalyticsImportSummary,
+      "status" | "imported" | "remaining"
+    >
+  > = []
+  for (const app of apps) {
+    if (app.workspace?.is_demo) continue
+    if (Date.now() - startedAt > TIME_BUDGET_MS) break
+    try {
+      const summary = await importStoreAnalytics(
+        db,
+        { getAnalyticsProvider },
+        { appId: app.id, trigger: "scheduled", deadline: startedAt + TIME_BUDGET_MS },
+      )
+      analytics.push({
+        appId: app.id,
+        app: app.name,
+        status: summary.status,
+        imported: summary.imported,
+        remaining: summary.remaining,
+      })
+    } catch (error) {
+      logger.error("analytics_import_failed", {
+        appId: app.id,
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
   logger.info("job_finished", { apps: results.length, ms: Date.now() - startedAt })
-  return Response.json({ ok: true, durationMs: Date.now() - startedAt, results })
+  return Response.json({ ok: true, durationMs: Date.now() - startedAt, results, analytics })
 }
 
 export const GET = run

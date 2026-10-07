@@ -2,6 +2,7 @@ import "server-only"
 
 import { createLogger } from "@/lib/logger"
 import { getMetadataProvider } from "@/lib/stores/registry"
+import type { Json } from "@/lib/supabase/database.types"
 import type { AsoClient, TableInsert } from "@/lib/supabase/types"
 import { normalizeText } from "@/lib/validation/common"
 import type { Listing } from "./model"
@@ -11,9 +12,11 @@ const logger = createLogger("listing-sync")
 export type SyncOutcome = { ok: true; detectedChanges: string[] } | { ok: false; message: string }
 
 /**
- * Imports public listing metadata from the store. When a previously stored value
- * differs from the store's current value, the change is recorded on the ASO timeline
- * (source = provider id) so it can annotate rank charts. First imports record nothing.
+ * Imports listing metadata from the store: the public App Store listing, or the official
+ * Google Play listing. Fields the store doesn't provide (e.g. the iOS subtitle and keyword
+ * field) keep their stored values. When a previously stored value differs from the
+ * store's current value, the change is recorded on the ASO timeline (source = provider
+ * id) so it can annotate rank charts. First imports record nothing.
  */
 export async function syncListingFromStore(
   db: AsoClient,
@@ -28,6 +31,7 @@ export async function syncListingFromStore(
     platform: listing.platform,
     externalAppId: listing.externalAppId,
     country: listing.country,
+    language: listing.language,
   })
   if (!result.ok) {
     logger.warn("sync_failed", { listingId: listing.id, code: result.error.code })
@@ -42,23 +46,29 @@ export async function syncListingFromStore(
     .single()
   if (loadError) return { ok: false, message: "Couldn't load the listing." }
 
+  // Only overwrite stored extras with values the store actually returned.
+  const extras: Record<string, Json> = Object.fromEntries(
+    Object.entries({
+      version: store.version,
+      rating: store.rating,
+      rating_count: store.ratingCount,
+      store_url: store.storeUrl,
+      listing_language: store.listingLanguage ?? null,
+    }).filter((entry): entry is [string, string | number] => entry[1] != null),
+  )
+
   const { error: updateError } = await db
     .from("store_listings")
     .update({
       title: store.title ?? listing.title,
+      subtitle_or_short_description: store.subtitle ?? listing.subtitle,
       description: store.description ?? listing.description,
       developer_name: store.developerName ?? listing.developerName,
       primary_category: store.primaryCategory ?? listing.primaryCategory,
       package_or_bundle_id: listing.packageOrBundleId ?? store.bundleId,
       metadata_source: store.source,
       last_synced_at: store.fetchedAt.toISOString(),
-      metadata: {
-        ...((current.metadata ?? {}) as Record<string, unknown>),
-        version: store.version,
-        rating: store.rating,
-        rating_count: store.ratingCount,
-        store_url: store.storeUrl,
-      },
+      metadata: { ...((current.metadata ?? {}) as Record<string, Json>), ...extras },
     })
     .eq("id", listing.id)
   if (updateError) return { ok: false, message: "Couldn't save the imported metadata." }
@@ -88,6 +98,17 @@ export async function syncListingFromStore(
       description: detected,
       before_data: { text: listing.title! },
       after_data: { text: store.title! },
+    })
+  }
+  if (differs(listing.subtitle, store.subtitle)) {
+    const label = listing.platform === "ios" ? "Subtitle changed" : "Short description changed"
+    events.push({
+      ...base,
+      event_type: "subtitle_change",
+      title: label,
+      description: detected,
+      before_data: { text: listing.subtitle! },
+      after_data: { text: store.subtitle! },
     })
   }
   if (differs(listing.description, store.description)) {

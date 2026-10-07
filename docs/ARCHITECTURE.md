@@ -76,7 +76,7 @@ src/
       settings/                     App, listings, integrations, workspace
     api/jobs/rank-collection/       Scheduler entry point (bearer CRON_SECRET)
   components/{ui,aso,charts,dashboard}
-  features/{workspaces,apps,listings,keywords,rankings,popularity,experiments,overview}
+  features/{workspaces,apps,listings,keywords,rankings,popularity,experiments,overview,analytics}
   lib/{aso,stores,http,supabase,auth,validation}
   proxy.ts                          Session refresh + route protection (Next 16 proxy)
 supabase/{migrations,seed.sql,functions}
@@ -125,6 +125,8 @@ All tables live in the `aso` Postgres schema, which is exposed to PostgREST. Mig
 | `competitors` / `competitor_snapshots` | Competitor tracking | Schema only in V0.1 |
 | `aso_events` | Annotated ASO changes (title change, release…) | `before_data`/`after_data` JSONB because payloads vary by event type |
 | `collector_runs` | Audit log of rank collection runs | Status, counts, errors; powers "last refreshed" |
+| `store_analytics_imports` | One row per imported analytics report instance | Unique per app × source × instance; `first/last_metric_date` = dates the instance covers |
+| `store_analytics_metrics` | Append-only additive daily counts per instance | date × territory × source type × metric (impressions, product page views, first-time downloads, redownloads) |
 
 JSONB is used only where payloads vary (`store_listings.metadata`, event before/after,
 difficulty details, competitor snapshot metadata). Everything filterable or sortable is a column.
@@ -133,6 +135,15 @@ difficulty details, competitor snapshot metadata). Everything filterable or sort
 latest and previous rank, latest popularity (with its period and details), latest difficulty and
 its last 14 rank observations (for sparklines). The keyword table and overview read from it in a
 single query.
+
+**View:** `store_analytics_daily` (`security_invoker`) returns, per app × report × date, only
+the rows of the latest instance covering that date. Apple's newer instances replace older ones
+for the dates they cover, so values are never summed across instances. The
+`aso.store_analytics_breakdown(app, source, from, to, series_from)` function returns the
+Analytics page's aggregates as one JSON value (daily totals, source and territory totals, covered
+dates per report), which avoids the API row limit. `aso.import_store_analytics_instance(…)`
+inserts an instance and its rows in one transaction and is a no-op for an instance already
+imported.
 
 **Indexes** cover the dashboard access paths: `keywords(app_id, tracked)`,
 `*_history(keyword_id, <time> desc)`, `aso_events(app_id, happened_at desc)`,
@@ -186,7 +197,8 @@ place that knows which concrete providers exist.
 |---|---|---|
 | Estimated rank | `AppleItunesRankProvider` (public iTunes Search API) | `GooglePlayRankProvider` → `unsupported` |
 | Popularity | `AppleAdsPopularityProvider` (needs Apple Ads credentials) | none |
-| Listing metadata | `AppleItunesMetadataProvider` (public iTunes Lookup API) | none |
+| Store analytics | `AppStoreConnectAnalyticsProvider` (official App Store Connect Analytics Reports) | none |
+| Listing metadata | `AppleItunesMetadataProvider` (public iTunes Lookup API) | `GooglePlayMetadataProvider` (official Google Play Developer API) |
 
 ### Apple estimated rank
 
@@ -259,7 +271,52 @@ a value read from the Apple Ads UI.
 **Not verified live.** The implementation has only been tested against fake responses built from
 Apple's documented examples. Verify against a real account before relying on it.
 
-### Android
+### App Store Connect analytics
+
+`AppStoreConnectAnalyticsProvider` implements `StoreAnalyticsProvider`:
+- `ensureReporting(appleId)` finds the app's active report requests and creates an ONGOING one
+  if there's none. Creating needs an Admin key; a 403 says so.
+- `listInstances(requestIds)` gets the "App Store Discovery and Engagement Standard" and "App
+  Downloads Standard" reports (`filter[name]`) and their DAILY instances, following
+  `links.next`.
+- `getInstance(instance, appleId)` downloads every segment from its pre-signed URL (no
+  Authorization header), checks `sizeInBytes` and the MD5 `checksum`, un-gzips it and hands the
+  text to the pure parser (`analytics-report-parser.ts`). The parser detects tab or comma
+  delimiters and quoting, requires the documented columns, sums only additive `Counts`, and
+  rejects malformed dates or counts.
+
+The collector (`src/features/analytics/collector.ts`) imports instances not imported yet,
+oldest processing date first, bounded per pass, and records a `collector_runs` row
+(`job_type = store_analytics`). It runs from the daily job after rank collection, and from
+"Import from App Store Connect" (10 instances per click, as the signed-in user under RLS).
+
+The page model (`src/features/analytics/model.ts`) keeps "no events" (a covered date without
+rows → 0) apart from "no data" (an uncovered date → null). It marks days within Apple's
+completeness window (3 days engagement, 2 days downloads) as not final, and only shows
+period-over-period change for equal windows of complete, fully covered days.
+
+### Google Play listing metadata
+
+`GooglePlayMetadataProvider` uses the official Google Play Developer API (`androidpublisher` v3)
+with a service account (`GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`). Auth is the OAuth 2.0 JWT bearer
+grant: an RS256 assertion (`iss` = service-account email, `scope` = androidpublisher, `aud` =
+token URI), cached for its hour of validity.
+
+Listings are only readable inside an edit, so each import is: `POST /edits` → `GET
+/edits/{id}/listings` and `GET /edits/{id}/details` (default language) → `DELETE /edits/{id}`
+in a `finally`. It never calls `:commit`, so nothing is published. The listing language is
+chosen as exact match, then same base language (`en` → `en-US`), then the app's default
+language. The import maps `title`, `shortDescription` (→ `subtitle_or_short_description`) and
+`fullDescription`. The API has no category, developer, version or ratings. HTTP 403 means the
+service account hasn't been granted the app in Play Console (Users and permissions → View app
+information), and the provider says so.
+
+Listing sync (`src/features/listings/sync.ts`) is shared by both stores. Fields the store
+doesn't return keep their stored values: the iOS subtitle and keyword field are never touched
+by an App Store sync. Changes to title, subtitle/short description, description and version
+found by a later sync are recorded on the ASO timeline.
+
+### Android ranks
 
 `GooglePlayRankProvider` returns `unsupported`. We will not ship brittle HTML scraping to tick a
 box. The interface, schema (`platform = android`) and UI already handle Android listings and

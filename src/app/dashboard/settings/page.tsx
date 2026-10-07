@@ -13,7 +13,7 @@ import {
 } from "@/lib/aso/scoring/rank-opportunity"
 import { getSourceInfo } from "@/lib/aso/sources"
 import { formatDateTime } from "@/lib/format"
-import { describeIntegrations } from "@/lib/stores/registry"
+import { canSyncListings, describeIntegrations } from "@/lib/stores/registry"
 import { cn } from "@/lib/utils"
 import type { Platform } from "@/types/aso"
 
@@ -76,7 +76,12 @@ export default async function SettingsPage() {
             <div className="divide-y">
               {listings.map((listing, i) => (
                 <div key={listing.id} className="space-y-4 p-4">
-                  <ListingEditor listing={listing} canEdit={ctx.canEdit} isDemo={ctx.isDemo} />
+                  <ListingEditor
+                    listing={listing}
+                    canEdit={ctx.canEdit}
+                    isDemo={ctx.isDemo}
+                    canSync={canSyncListings(listing.platform)}
+                  />
                   {snapshots[i]!.length > 0 ? (
                     <details className="group rounded-md border">
                       <summary className="cursor-pointer px-3 py-2 text-xs text-muted-foreground hover:text-foreground">

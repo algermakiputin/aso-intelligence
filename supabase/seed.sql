@@ -4,10 +4,12 @@
 --   Dev login:   dev@example.com / aso-dev-password
 --
 --   1. Workspace "Hunter Vault": the real Hunter Vault app with its public store
---      identifiers only (App Store ID 6761086056, bundle com.hunter.vault, US/en,
---      as returned by Apple's public Lookup API). No subtitle, keyword field, metrics,
---      popularity or rankings are seeded: the subtitle and keyword field are private App
---      Store Connect metadata, and rankings come from real rank checks.
+--      identifiers only: iOS App Store ID 6761086056 / bundle com.hunter.vault (as
+--      returned by Apple's public Lookup API) and Google Play package com.hunter.vault
+--      (as listed on Google Play), both US/en. No listing text, subtitle, keyword field,
+--      metrics, popularity or rankings are seeded: the iOS subtitle and keyword field are
+--      private App Store Connect metadata, listing text comes from a store sync, and
+--      rankings come from real rank checks.
 --   2. Workspace "Demo workspace" (is_demo = true): a fictional app with synthetic
 --      history (source = demo). The UI labels it "Demo data" on every page and the
 --      collectors skip it.
@@ -85,6 +87,19 @@ values (
   '20000000-0000-4000-8000-000000000001',
   'ios',
   '6761086056',
+  'com.hunter.vault',
+  'US',
+  'en'
+);
+
+-- Google Play listing. "Sync from Google Play" imports the title, short and full
+-- description through the Google Play Developer API (needs GOOGLE_PLAY_SERVICE_ACCOUNT_JSON).
+insert into aso.store_listings (id, app_id, platform, external_app_id, package_or_bundle_id, country, language)
+values (
+  '30000000-0000-4000-8000-000000000002',
+  '20000000-0000-4000-8000-000000000001',
+  'android',
+  'com.hunter.vault',
   'com.hunter.vault',
   'US',
   'en'

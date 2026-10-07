@@ -54,7 +54,7 @@ const NAV = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
   { href: "/dashboard/keywords", label: "Keywords", icon: Search },
   { href: "/dashboard/competitors", label: "Competitors", icon: Swords, soon: true },
-  { href: "/dashboard/analytics", label: "Analytics", icon: BarChart3, soon: true },
+  { href: "/dashboard/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/dashboard/experiments", label: "Experiments", icon: FlaskConical },
   { href: "/dashboard/reviews", label: "Reviews", icon: MessageSquareText, soon: true },
 ] as const

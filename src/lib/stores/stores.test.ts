@@ -12,6 +12,11 @@ import {
 import { ItunesClient } from "./apple/itunes-client"
 import { AppleItunesMetadataProvider } from "./apple/itunes-metadata-provider"
 import { AppleItunesRankProvider } from "./apple/itunes-rank-provider"
+import {
+  GooglePlayMetadataProvider,
+  parseServiceAccount,
+  pickListingLanguage,
+} from "./google/google-play-metadata-provider"
 import { GooglePlayRankProvider } from "./google/google-play-rank-provider"
 
 const OUR_APP = 6761086056
@@ -522,5 +527,184 @@ describe("AppleAdsPopularityProvider requests", () => {
       ok: false,
       error: { code: "rate_limited", retryable: true },
     })
+  })
+})
+
+describe("GooglePlayMetadataProvider", () => {
+  const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 })
+  const serviceAccount = JSON.stringify({
+    type: "service_account",
+    client_email: "aso-api@example-project.iam.gserviceaccount.com",
+    private_key: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+    private_key_id: "key-1",
+    token_uri: "https://oauth2.googleapis.com/token",
+  })
+  const APP =
+    "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/com.hunter.vault"
+  const query = {
+    platform: "android" as const,
+    externalAppId: "com.hunter.vault",
+    country: "US",
+    language: "en",
+  }
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status })
+
+  function fakeGoogle(overrides: Partial<Record<string, () => Response>> = {}) {
+    const calls: Array<{ method: string; url: string; body: string | null }> = []
+    const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? "GET"
+      calls.push({ method, url, body: typeof init?.body === "string" ? init.body : null })
+      const key = `${method} ${url.replace(APP, "")}`
+      if (overrides[key]) return overrides[key]!()
+      if (url === "https://oauth2.googleapis.com/token")
+        return json({ access_token: "g-token", expires_in: 3600 })
+      if (key === "POST /edits") return json({ id: "edit-1", expiryTimeSeconds: "1800000000" })
+      if (key === "GET /edits/edit-1/listings") {
+        return json({
+          listings: [
+            {
+              language: "de-DE",
+              title: "Hunter Vault DE",
+              shortDescription: "kurz",
+              fullDescription: "lang",
+            },
+            {
+              language: "en-US",
+              title: "Hunter Vault: Gamified Budget",
+              shortDescription: "Gamified budgeting",
+              fullDescription: "Full description",
+            },
+          ],
+        })
+      }
+      if (key === "GET /edits/edit-1/details") return json({ defaultLanguage: "en-US" })
+      if (key === "DELETE /edits/edit-1") return new Response(null, { status: 204 })
+      return json({ error: { code: 404 } }, 404)
+    })
+    const provider = new GooglePlayMetadataProvider(serviceAccount, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      sleep: async () => {},
+    })
+    return { provider, calls }
+  }
+
+  it("is not configured without a valid service-account key, and makes no requests", async () => {
+    expect(new GooglePlayMetadataProvider(undefined).status()).toMatchObject({
+      state: "not_configured",
+      detail: "Google Play not connected",
+    })
+    expect(new GooglePlayMetadataProvider("{not json").status()).toMatchObject({
+      state: "not_configured",
+      detail: "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON is not a valid service-account key",
+    })
+    expect(parseServiceAccount(JSON.stringify({ type: "authorized_user" }))).toEqual({
+      ok: false,
+      reason: "invalid",
+    })
+    const fetchImpl = vi.fn()
+    const result = await new GooglePlayMetadataProvider(undefined, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    }).getListing(query)
+    expect(result).toMatchObject({ ok: false, error: { code: "not_configured" } })
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it("reads the listing inside a draft edit and always discards it without committing", async () => {
+    const { provider, calls } = fakeGoogle()
+    const result = await provider.getListing(query)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data).toMatchObject({
+      externalAppId: "com.hunter.vault",
+      bundleId: "com.hunter.vault",
+      title: "Hunter Vault: Gamified Budget",
+      subtitle: "Gamified budgeting",
+      description: "Full description",
+      listingLanguage: "en-US",
+      storeUrl: "https://play.google.com/store/apps/details?id=com.hunter.vault",
+      source: "google_play_developer_api",
+    })
+    expect(calls.map((c) => `${c.method} ${c.url.replace(APP, "")}`)).toEqual([
+      "POST https://oauth2.googleapis.com/token",
+      "POST /edits",
+      "GET /edits/edit-1/listings",
+      "GET /edits/edit-1/details",
+      "DELETE /edits/edit-1",
+    ])
+    expect(calls.some((c) => c.url.includes(":commit"))).toBe(false)
+  })
+
+  it("signs a verifiable RS256 JWT bearer assertion", async () => {
+    const { provider, calls } = fakeGoogle()
+    await provider.getListing(query)
+    const body = new URLSearchParams(calls[0]!.body!)
+    expect(body.get("grant_type")).toBe("urn:ietf:params:oauth:grant-type:jwt-bearer")
+    const [header, claims, signature] = body.get("assertion")!.split(".")
+    expect(JSON.parse(Buffer.from(header!, "base64url").toString())).toEqual({
+      alg: "RS256",
+      typ: "JWT",
+      kid: "key-1",
+    })
+    expect(JSON.parse(Buffer.from(claims!, "base64url").toString())).toMatchObject({
+      iss: "aso-api@example-project.iam.gserviceaccount.com",
+      scope: "https://www.googleapis.com/auth/androidpublisher",
+      aud: "https://oauth2.googleapis.com/token",
+    })
+    expect(
+      verify(
+        "RSA-SHA256",
+        Buffer.from(`${header}.${claims}`),
+        publicKey,
+        Buffer.from(signature!, "base64url"),
+      ),
+    ).toBe(true)
+  })
+
+  it("discards the draft edit even when reading the listing fails", async () => {
+    const { provider, calls } = fakeGoogle({
+      "GET /edits/edit-1/listings": () => json({ error: { code: 500 } }, 500),
+    })
+    const result = await provider.getListing(query)
+    expect(result).toMatchObject({ ok: false, error: { code: "network" } })
+    expect(calls.at(-1)).toMatchObject({ method: "DELETE" })
+  })
+
+  it("explains missing Play Console access and unknown packages", async () => {
+    const denied = fakeGoogle({ "POST /edits": () => json({ error: { code: 403 } }, 403) })
+    const result = await denied.provider.getListing(query)
+    expect(result).toMatchObject({ ok: false, error: { code: "not_configured" } })
+    if (!result.ok) expect(result.error.message).toContain("Users and permissions")
+    // No edit was opened, so there is nothing to delete.
+    expect(denied.calls.some((c) => c.method === "DELETE")).toBe(false)
+
+    const missing = fakeGoogle({ "POST /edits": () => json({ error: { code: 404 } }, 404) })
+    expect(await missing.provider.getListing(query)).toMatchObject({
+      ok: false,
+      error: { code: "not_found" },
+    })
+  })
+
+  it("rejects non-Android queries and invalid package names without calling Google", async () => {
+    const { provider, calls } = fakeGoogle()
+    expect(await provider.getListing({ ...query, platform: "ios" })).toMatchObject({
+      ok: false,
+      error: { code: "unsupported" },
+    })
+    expect(await provider.getListing({ ...query, externalAppId: "not a package" })).toMatchObject({
+      ok: false,
+      error: { code: "invalid_input" },
+    })
+    expect(calls).toHaveLength(0)
+  })
+})
+
+describe("pickListingLanguage", () => {
+  it("prefers an exact match, then the same base language, then the default", () => {
+    expect(pickListingLanguage(["en-US", "en-GB"], "en-GB", "en-US")).toBe("en-GB")
+    expect(pickListingLanguage(["en-GB", "en-US", "de-DE"], "en", "en-US")).toBe("en-US")
+    expect(pickListingLanguage(["en-GB", "en-AU"], "en", "de-DE")).toBe("en-AU")
+    expect(pickListingLanguage(["de-DE", "fr-FR"], "ja", "de-DE")).toBe("de-DE")
+    expect(pickListingLanguage([], "en", null)).toBeNull()
   })
 })

@@ -43,6 +43,18 @@ const SOURCES: Record<string, SourceInfo> = {
     "App Store (public lookup)",
     "Imported from Apple's public iTunes Lookup API.",
   ),
+  apple_app_store_connect_analytics: source(
+    "apple_app_store_connect_analytics",
+    "App Store Connect Analytics",
+    "Official App Store analytics from the App Store Connect Analytics Reports API.",
+    true,
+  ),
+  google_play_developer_api: source(
+    "google_play_developer_api",
+    "Google Play Console (API)",
+    "Imported from the official Google Play Developer API.",
+    true,
+  ),
   listing_change: source(
     "listing_change",
     "Listing edit",

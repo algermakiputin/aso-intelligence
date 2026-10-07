@@ -25,6 +25,12 @@ const serverSchema = z.object({
   APPLE_ADS_PRIVATE_KEY: optionalString,
   APPLE_ADS_CLIENT_SECRET: optionalString,
   APPLE_ADS_ACCOUNT_ID: optionalString,
+  APPLE_CONNECT_ISSUER_ID: optionalString,
+  APPLE_CONNECT_KEY_ID: optionalString,
+  /** App Store Connect API team key (.p8 contents; escaped \n newlines accepted). */
+  APPLE_CONNECT_PRIVATE_KEY: optionalString,
+  /** Service-account JSON key (one line) for the Google Play Developer API. */
+  GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: optionalString,
 })
 
 export type ServerEnv = z.infer<typeof serverSchema>

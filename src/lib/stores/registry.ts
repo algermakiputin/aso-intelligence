@@ -8,21 +8,25 @@ import "server-only"
 import { getServerEnv } from "@/lib/env/server"
 import type { Platform } from "@/types/aso"
 import { AppleAdsPopularityProvider } from "./apple/apple-ads-popularity-provider"
+import { AppStoreConnectAnalyticsProvider } from "./apple/app-store-connect-analytics-provider"
 import { ItunesClient } from "./apple/itunes-client"
 import { AppleItunesMetadataProvider } from "./apple/itunes-metadata-provider"
 import { AppleItunesRankProvider } from "./apple/itunes-rank-provider"
+import { GooglePlayMetadataProvider } from "./google/google-play-metadata-provider"
 import { GooglePlayRankProvider } from "./google/google-play-rank-provider"
 import type {
   KeywordPopularityProvider,
   KeywordRankProvider,
   MetadataProvider,
   ProviderStatus,
+  StoreAnalyticsProvider,
 } from "./types"
 
 interface Registry {
   rank: Record<Platform, KeywordRankProvider>
   popularity: Record<Platform, KeywordPopularityProvider | null>
   metadata: Record<Platform, MetadataProvider | null>
+  analytics: Record<Platform, StoreAnalyticsProvider | null>
 }
 
 let registry: Registry | null = null
@@ -48,6 +52,14 @@ function build(): Registry {
     },
     metadata: {
       ios: new AppleItunesMetadataProvider(itunes),
+      android: new GooglePlayMetadataProvider(env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON),
+    },
+    analytics: {
+      ios: new AppStoreConnectAnalyticsProvider({
+        issuerId: env.APPLE_CONNECT_ISSUER_ID,
+        keyId: env.APPLE_CONNECT_KEY_ID,
+        privateKey: env.APPLE_CONNECT_PRIVATE_KEY,
+      }),
       android: null,
     },
   }
@@ -68,6 +80,15 @@ export function getPopularityProvider(platform: Platform): KeywordPopularityProv
 
 export function getMetadataProvider(platform: Platform): MetadataProvider | null {
   return getRegistry().metadata[platform]
+}
+
+export function getAnalyticsProvider(platform: Platform): StoreAnalyticsProvider | null {
+  return getRegistry().analytics[platform]
+}
+
+/** True when listings on `platform` can be imported from the store right now. */
+export function canSyncListings(platform: Platform): boolean {
+  return getMetadataProvider(platform)?.status().state === "ready"
 }
 
 export interface IntegrationStatus {
@@ -104,14 +125,10 @@ export function describeIntegrations(): IntegrationStatus[] {
       ? [entry("popularity-ios", "Keyword popularity", "ios", r.popularity.ios)]
       : []),
     ...(r.metadata.ios ? [entry("metadata-ios", "Listing metadata", "ios", r.metadata.ios)] : []),
-    {
-      key: "asc-analytics",
-      capability: "Store analytics",
-      platform: "ios",
-      name: "App Store Connect Analytics",
-      official: true,
-      status: planned("Planned for V0.2"),
-    },
+    ...(r.metadata.android
+      ? [entry("metadata-android", "Listing metadata", "android", r.metadata.android)]
+      : []),
+    ...(r.analytics.ios ? [entry("analytics-ios", "Store analytics", "ios", r.analytics.ios)] : []),
     {
       key: "play-reporting",
       capability: "Store analytics",

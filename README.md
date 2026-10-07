@@ -42,15 +42,16 @@ it, but nothing in the core is specific to Hunter Vault.
 | Area | What works |
 |---|---|
 | Accounts | Email and password sign-up and sign-in (Supabase Auth), workspaces with owner/admin/viewer roles, RLS on every table |
-| Setup | Onboarding (create workspace, add app), iOS and/or Android listings, App Store ID or URL accepted, live listing import from the App Store |
+| Setup | Onboarding (create workspace, add app), iOS and/or Android listings, App Store ID or URL accepted, live listing import from the App Store, official listing import from Google Play (when connected) |
 | Overview | Tracked keywords, top 10/50, improved/declined, Estimated Search Visibility, ranking distribution, top opportunities, rank movement, ASO Health checklist, recent changes |
 | Keywords | Dense sortable table with search and filters (platform, country, rank band, tracking), bulk pause/resume/priority/delete, add many keywords at once, mobile list layout |
 | Rank tracking | Estimated iOS rank via Apple's public Search API, batched manual refresh with progress, append-only history, scheduler endpoint |
 | Keyword detail | Rank history (7D/30D/90D/All) annotated with ASO events, popularity history plus manual entry, movement table, Opportunity Score breakdown (with the reason for each missing input), metadata coverage, top competing results, related events |
 | Experiments | ASO change timeline: title, subtitle, keyword, description, screenshot and icon changes, releases, custom events |
-| Settings | App details, listing metadata editor (keyword field counter), App Store sync of public fields that records detected changes, metadata history, integration status, scoring documentation |
+| Settings | App details, listing metadata editor (keyword field counter), "Sync from App Store" (public fields) and "Sync from Google Play" (official API) that record detected changes, metadata history, integration status, scoring documentation |
 | Popularity | Manual entry (labelled "Manual entry"). The Apple Ads Search Term Popularity provider is implemented against Apple's official docs but has no UI trigger yet and hasn't run against a live account |
-| Coming next | Competitors, Analytics and Reviews pages describe what's planned. They contain no simulated data. |
+| Analytics | Official App Store Connect numbers: impressions, product page views, first-time downloads and App Store search share for 28/90/180 days, daily trends with not-final days marked and ASO changes annotated, breakdowns by source and storefront, a daily-values table. Imported daily and on demand |
+| Coming next | Competitors and Reviews pages describe what's planned. They contain no simulated data. |
 
 ## Data semantics
 
@@ -71,7 +72,8 @@ stored or scored as 0. See [Apple Search Term Popularity](#apple-search-term-pop
 The public App Store listing (iTunes Lookup) is not an authoritative source for them, and the tool
 never infers them from it. Sync from App Store imports only public fields (title, description,
 developer, category, version, ratings). The subtitle and keyword field are entered by hand and
-labelled as manual.
+labelled as manual. On Google Play there's no hidden field: the title, short description and full
+description come from the official Google Play Developer API when it's connected.
 
 ## Architecture
 
@@ -120,12 +122,16 @@ npm run dev                 # http://localhost:3000
 Sign in with the seeded dev account: **dev@example.com / aso-dev-password**.
 
 The seed creates:
-- **Hunter Vault** workspace → Hunter Vault app → iOS listing with public identifiers only:
-  App Store ID `6761086056`, bundle `com.hunter.vault`, US, en (as returned by Apple's public
-  Lookup API). There's no title, subtitle, keyword field, popularity, rankings or other metrics.
-  In Settings → Store listings, click **Sync from App Store** to import the public title and
-  description. Enter the subtitle and keyword field by hand from App Store Connect. Then add
-  keywords and click **Refresh rankings**.
+- **Hunter Vault** workspace → Hunter Vault app with two listings, public identifiers only:
+  - iOS: App Store ID `6761086056`, bundle `com.hunter.vault`, US, en (as returned by Apple's
+    public Lookup API);
+  - Android: package `com.hunter.vault`, US, en (as listed on Google Play).
+
+  There's no listing text, subtitle, keyword field, popularity, rankings or other metrics. In
+  Settings → Store listings, click **Sync from App Store** to import the public iOS title and
+  description, and **Sync from Google Play** (once connected, see below) to import the Android
+  title, short and full description. Enter the iOS subtitle and keyword field by hand from App
+  Store Connect. Then add keywords and click **Refresh rankings**.
 - **Demo workspace** → "Budget Quest (demo)" with 90 days of synthetic history so you can see
   charts immediately. It is labelled "Demo data", every row has `source = demo`, and rank checks
   are disabled there.
@@ -150,6 +156,7 @@ Supabase projects.
 | `20261005090200_aso_competitors_and_events.sql` | competitors, competitor snapshots, ASO events |
 | `20261005090300_aso_rls_and_grants.sql` | Grants and RLS policies for every table |
 | `20261006090000_aso_popularity_details.sql` | `details` on popularity history (Apple's in-genre metrics); popularity period and details on `keyword_overview` |
+| `20261007090000_aso_store_analytics.sql` | Store analytics imports and metrics (append-only), `store_analytics_daily` view (latest instance per date), import and breakdown functions, RLS |
 
 ```bash
 npm run db:migration:new <name>   # new migration file
@@ -179,7 +186,8 @@ Validated at runtime with Zod (`src/lib/env`). Variables marked server-only are 
 | `SUPABASE_SERVICE_ROLE_KEY` | for scheduled jobs | Server-only. Bypasses RLS. Used only by the cron endpoint. |
 | `CRON_SECRET` | for scheduled jobs | At least 16 characters. Bearer token for `/api/jobs/rank-collection`. |
 | `APPLE_ADS_CLIENT_ID`, `APPLE_ADS_TEAM_ID`, `APPLE_ADS_KEY_ID`, `APPLE_ADS_PRIVATE_KEY`, `APPLE_ADS_ACCOUNT_ID` | optional | Apple Ads search-term popularity. `APPLE_ADS_CLIENT_SECRET` (a pre-signed JWT) can replace team/key/private key. |
-| `APPLE_CONNECT_*`, `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | not yet | Reserved for V0.2 |
+| `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | optional | Server-only. Service-account JSON key on one line, in single quotes. Enables "Sync from Google Play" (see [Google Play listing import](#google-play-listing-import)) |
+| `APPLE_CONNECT_ISSUER_ID`, `APPLE_CONNECT_KEY_ID`, `APPLE_CONNECT_PRIVATE_KEY` | optional | Server-only. App Store Connect API team key for [App Store Connect analytics](#app-store-connect-analytics). The private key is the `.p8` contents (escaped `\n` newlines accepted) |
 
 Without the Apple Ads variables the app works normally and shows "Apple keyword popularity not
 connected".
@@ -220,7 +228,8 @@ interface KeywordRankProvider {
 |---|---|---|
 | Estimated rank | `AppleItunesRankProvider`: public Search API, top 200 results | `GooglePlayRankProvider`: returns `unsupported` (see limitations) |
 | Popularity | `AppleAdsPopularityProvider`: needs credentials | none |
-| Listing metadata | `AppleItunesMetadataProvider`: public Lookup API | none |
+| Store analytics | `AppStoreConnectAnalyticsProvider`: official Analytics Reports API, needs an API key | none |
+| Listing metadata | `AppleItunesMetadataProvider`: public Lookup API | `GooglePlayMetadataProvider`: official Google Play Developer API, needs a service account |
 
 To swap a provider, for example a licensed rank-data vendor, implement the interface and change
 the registry. Nothing else changes, and observations keep their `source`, so old and new data
@@ -279,6 +288,72 @@ stored.
 been tested against fake responses built from Apple's documented examples. The sync
 (`syncPopularityAction`) also has no button in V0.1. Popularity can be recorded manually from
 the keyword page; those values are labelled "Manual entry".
+
+### App Store Connect analytics
+
+`AppStoreConnectAnalyticsProvider` imports Apple's official numbers through the App Store Connect
+API's Analytics Reports, following Apple's "Downloading Analytics Reports" guide:
+
+1. An **ONGOING analytics report request** for the app. It's created once, and creating it needs a
+   key with the **Admin** role. Apple produces the first reports 1–2 days later, then one a day.
+   The import recreates the request if Apple stops it for inactivity.
+2. The request's **App Store Discovery and Engagement Standard** and **App Downloads Standard**
+   reports, and their **daily instances**.
+3. Each instance's segment files. They're downloaded from pre-signed URLs, checked against
+   Apple's size and MD5 checksum, un-gzipped, and parsed.
+
+What's stored, per date × storefront × source type (App Store search, App Store browse, App
+referrer, Web referrer…):
+
+| Metric | From |
+|---|---|
+| Impressions | Engagement report, Event = Impression |
+| Product page views | Engagement report, Event = Page view on Page Type = Product page |
+| First-time downloads, redownloads | Downloads report, Download Type |
+
+Rules the import follows:
+- **Only additive counts.** Apple's "Counts" are summed; its "Unique Counts" can't be summed
+  across storefronts or sources without double counting people, so they aren't stored. That's
+  also why there's no conversion-rate figure yet.
+- **Latest delivery wins.** A newer instance replaces older ones for every date it covers.
+  Instances are stored as delivered (append-only), and the `store_analytics_daily` view picks
+  the latest instance covering each date, so nothing is ever double counted.
+- **Zero vs. no data.** Inside an imported instance's date range, a date without rows had no
+  events (0). Dates no instance covers have no data and are shown as gaps, never as zero.
+- **Not final.** Apple completes daily data within 3 days (engagement) or 2 days (downloads).
+  Later days are shaded "Not final". Period-over-period change compares equal windows of
+  complete, fully covered days only; otherwise no change is shown.
+
+Setup: in App Store Connect → Users and Access → Integrations → App Store Connect API → Team
+Keys, generate a key with the Admin role and download the `.p8` file (Apple only lets you
+download it once). Set `APPLE_CONNECT_ISSUER_ID` (top of that page), `APPLE_CONNECT_KEY_ID` and
+`APPLE_CONNECT_PRIVATE_KEY`. Imports run with the daily scheduled job and from **Import from App
+Store Connect** on the Analytics page. The token is an ES256 JWT (`iss` = issuer ID, `kid` = key
+ID, `aud` = `appstoreconnect-v1`, 15-minute lifetime).
+
+### Google Play listing import
+
+`GooglePlayMetadataProvider` reads the store listing through the official Google Play Developer
+API (`androidpublisher` v3). The API only exposes listings inside an *edit* (a draft), so the
+provider opens one, reads the listings and the default language, and always deletes the edit
+without committing. Nothing is ever published to Google Play.
+
+It imports the title, short description and full description for the listing's language
+(`en` → the `en-US` listing, falling back to the app's default language, which is what Google
+Play shows). Google's API doesn't expose category, developer name, version or ratings, so those
+stay as they are. Changes to the title, short description or description found by a later sync
+are recorded on the ASO timeline.
+
+Setup:
+1. In Google Cloud, enable the **Google Play Android Developer API** and create a service
+   account with a JSON key. It needs no Cloud roles.
+2. In Play Console → **Users and permissions**, invite the service account's email and give it
+   **View app information** (read-only) for the app. Access can take a while to apply.
+3. Put the key in `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`, on one line in single quotes (see
+   `.env.example`). Don't commit the key file, and rotate the key if it's ever exposed.
+
+Auth is the OAuth 2.0 JWT bearer grant: an RS256 assertion signed with the service-account key,
+exchanged at `oauth2.googleapis.com/token` for an `androidpublisher`-scoped token.
 
 ## Why public-API ranks are "estimated"
 
@@ -366,8 +441,9 @@ popularity. That is why partial scores are labelled. A new formula should be a n
 
 ## Scheduled jobs
 
-`GET|POST /api/jobs/rank-collection` with `Authorization: Bearer $CRON_SECRET` checks due
-keywords for every non-demo app, within a 4-minute budget, using the service role.
+`GET|POST /api/jobs/rank-collection` with `Authorization: Bearer $CRON_SECRET` runs the daily
+jobs for every non-demo app, using the service role, within a 4-minute budget: first rank
+checks for due keywords (up to 3 minutes), then the App Store Connect analytics import.
 
 Vercel Cron sends the `CRON_SECRET` bearer automatically. The repo's `vercel.json` runs it daily
 at 06:00 UTC (the most a Vercel Hobby plan allows):
@@ -394,7 +470,7 @@ is per process, so run the job from one scheduler.
 
 ## Testing
 
-`npm test` runs 141 unit tests covering:
+`npm test` runs 166 unit tests covering:
 - rank values and movement, including provable vs. inconclusive New/Lost, threshold labels and
   unknown result counts;
 - Opportunity Score maths, partial and insufficient cases, missing-input reasons, and strategy
@@ -406,6 +482,12 @@ is per process, so run the job from one scheduler.
 - scheduling;
 - overview aggregation (including "outside top 100");
 - store-ID parsing;
+- the App Store Connect analytics report parser (delimiters, quoting, additive counts only,
+  malformed files rejected), the provider (fake `fetch`: ES256 token verification, report
+  request reuse and creation, the Admin requirement, pagination, gzip, size and MD5 checks), and
+  the analytics model (zero vs. no data, not-final days, comparable windows);
+- the Google Play metadata provider (fake `fetch`: RS256 assertion verification, edit opened,
+  read and always deleted, never committed, language choice, missing access);
 - the Apple rank and metadata providers, and the Apple Ads provider against the documented
   request and response shapes (fake `fetch`: auth, headers, body, pagination, periods,
   unavailable data, malformed responses, ES256 signature verification);
@@ -419,6 +501,9 @@ the seed):
 - history rejects updates, even from the service role and the superuser, and owners have no
   update or delete privilege on it;
 - popularity rows can't pair "not returned" with a score, and each period is stored once;
+- analytics: the latest instance covering a date wins, a covered date without rows means no
+  events, re-importing an instance is a no-op, rows can't be updated, and RLS isolates
+  workspaces;
 - deleting an app or a workspace cascades to everything under it;
 - the seed is deterministic and keeps synthetic data inside the demo workspace.
 
@@ -431,8 +516,8 @@ dark mode.
 
 - **V0.1**: project foundation, app setup, keyword intelligence, estimated iOS rank tracking,
   rank history, Opportunity Score, metadata coverage, ASO event timeline *(this release)*
-- **V0.2**: App Store Connect analytics, Google Play performance reports, search acquisition
-  data, conversion metrics
+- **V0.2**: App Store Connect analytics *(done)*, Google Play listing import *(done)*, Google
+  Play performance reports, conversion metrics
 - **V0.3**: competitor discovery (seeded from "top competing results"), competitor metadata
   monitoring, change detection
 - **V0.4**: review intelligence, phrase extraction, keyword discovery
@@ -444,6 +529,10 @@ dark mode.
 
 ## Known limitations
 
+- **Analytics are App Store only and lag by a few days.** Apple's daily data arrives the next day
+  and is final after 2–3 days. Google Play analytics aren't imported yet.
+- **Google Play import covers listing text only.** Google's API has no category, developer
+  name, version or ratings, and no keyword popularity or search data.
 - **Android rank tracking is not implemented.** Google offers no search-rank API, and HTML
   scraping is brittle, so the provider honestly reports "unsupported". Android listings and
   keywords can still be managed.

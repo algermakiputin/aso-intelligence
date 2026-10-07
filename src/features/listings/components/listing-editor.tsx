@@ -35,10 +35,13 @@ export function ListingEditor({
   listing,
   canEdit,
   isDemo,
+  canSync,
 }: {
   listing: Listing
   canEdit: boolean
   isDemo: boolean
+  /** The store's metadata import is connected for this listing's platform. */
+  canSync: boolean
 }) {
   const [state, formAction, pending] = useActionState(
     async (prev: Awaited<ReturnType<typeof updateListingMetadataAction>>, formData: FormData) => {
@@ -104,10 +107,10 @@ export function ListingEditor({
               View in store
             </a>
           </Button>
-          {canEdit && isIos && !isDemo ? (
+          {canEdit && canSync && !isDemo ? (
             <Button variant="outline" size="sm" onClick={sync} disabled={syncing}>
               {syncing ? <Spinner /> : <DownloadCloud />}
-              Sync from App Store
+              {isIos ? "Sync from App Store" : "Sync from Google Play"}
             </Button>
           ) : null}
           {canEdit ? <RemoveListingButton listing={listing} /> : null}
@@ -139,11 +142,13 @@ export function ListingEditor({
                   defaultValue={listing.subtitle ?? ""}
                   maxLength={255}
                 />
-                {isIos ? (
-                  <FieldDescription>
-                    Not available from the public API. Enter it from App Store Connect.
-                  </FieldDescription>
-                ) : null}
+                <FieldDescription>
+                  {isIos
+                    ? "Not available from the public API. Enter it from App Store Connect."
+                    : canSync
+                      ? "Imported from Google Play with Sync."
+                      : "Enter it from Play Console, or connect Google Play to import it."}
+                </FieldDescription>
               </Field>
             </div>
             {isIos ? (

@@ -24,6 +24,8 @@ export type ProviderErrorCode =
   | "invalid_input"
   /** The provider has no dataset for the query (not published yet, or storefront not covered). */
   | "unavailable"
+  /** The resource already exists (e.g. a report request). */
+  | "conflict"
 
 export interface ProviderError {
   code: ProviderErrorCode
@@ -165,13 +167,18 @@ export interface ListingMetadataQuery {
   platform: Platform
   externalAppId: string
   country: string
+  /** Listing language (e.g. "en"). Google Play listings are per language. */
+  language?: string
 }
 
 export interface StoreListingMetadata {
   externalAppId: string
   bundleId: string | null
   title: string | null
-  /** Public lookups don't expose the iOS subtitle; null means "unknown", not empty. */
+  /**
+   * iOS subtitle or Android short description. Public lookups don't expose the iOS
+   * subtitle; null means "unknown", not empty.
+   */
   subtitle: string | null
   description: string | null
   developerName: string | null
@@ -181,6 +188,8 @@ export interface StoreListingMetadata {
   rating: number | null
   ratingCount: number | null
   storeUrl: string | null
+  /** Store listing language actually read (Google Play), when the store has several. */
+  listingLanguage?: string | null
   source: string
   fetchedAt: Date
 }
@@ -190,29 +199,65 @@ export interface MetadataProvider extends ProviderDescriptor {
 }
 
 // ---------------------------------------------------------------------------
-// Contracts for later versions (no implementations in V0.1)
+// Store analytics (official store reports)
 // ---------------------------------------------------------------------------
 
-export interface StoreAnalyticsQuery {
-  platform: Platform
-  externalAppId: string
-  from: string
-  to: string
-}
+/** Additive metrics we import. Unique-user counts aren't additive and aren't stored. */
+export const STORE_ANALYTICS_METRICS = [
+  "impressions",
+  "product_page_views",
+  "first_time_downloads",
+  "redownloads",
+] as const
+export type StoreAnalyticsMetric = (typeof STORE_ANALYTICS_METRICS)[number]
 
-export interface StoreAnalyticsMetric {
-  date: string
-  country: string | null
-  /** e.g. impressions, product_page_views, downloads, conversion_rate */
-  metric: string
+/** One aggregated row of a report instance. */
+export interface StoreAnalyticsRow {
+  /** YYYY-MM-DD */
+  metricDate: string
+  /** Store country or region as reported by the store (e.g. "US"). */
+  territory: string
+  /** Normalized discovery source, e.g. app_store_search, app_store_browse, web_referrer. */
+  sourceType: string
+  metric: StoreAnalyticsMetric
   value: number
-  source: string
 }
 
-/** V0.2: App Store Connect Analytics / Google Play reporting. */
-export interface StoreAnalyticsProvider extends ProviderDescriptor {
-  getDailyMetrics(query: StoreAnalyticsQuery): Promise<ProviderResult<StoreAnalyticsMetric[]>>
+/**
+ * One delivery of a report. A newer instance replaces older ones for every date it
+ * covers; values are never summed across instances.
+ */
+export interface StoreAnalyticsInstance {
+  externalId: string
+  /** Our report key, e.g. app_store_discovery_engagement or app_downloads. */
+  report: string
+  granularity: "daily" | "weekly" | "monthly"
+  /** YYYY-MM-DD */
+  processingDate: string
 }
+
+export interface StoreAnalyticsInstanceData {
+  rows: StoreAnalyticsRow[]
+  /** Date range the instance covers (null when it has no rows at all). */
+  firstDate: string | null
+  lastDate: string | null
+}
+
+export interface StoreAnalyticsProvider extends ProviderDescriptor {
+  /** Make sure the store is producing reports for the app; returns the request ids to read. */
+  ensureReporting(
+    externalAppId: string,
+  ): Promise<ProviderResult<{ requestIds: string[]; created: boolean }>>
+  listInstances(requestIds: string[]): Promise<ProviderResult<StoreAnalyticsInstance[]>>
+  getInstance(
+    instance: StoreAnalyticsInstance,
+    externalAppId: string,
+  ): Promise<ProviderResult<StoreAnalyticsInstanceData>>
+}
+
+// ---------------------------------------------------------------------------
+// Contracts for later versions (no implementations yet)
+// ---------------------------------------------------------------------------
 
 export interface StoreReview {
   externalId: string
